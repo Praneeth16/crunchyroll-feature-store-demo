@@ -42,26 +42,28 @@ cfg = EndpointCoreConfigInput(
     )],
 )
 
+import time, json
+
+def with_conflict_retry(fn, what):
+    for attempt in range(10):
+        try:
+            return fn()
+        except Exception as e:
+            if "ResourceConflict" in type(e).__name__ and attempt < 9:
+                print(f"[{attempt}] {what}: entities still updating, retry in 30s")
+                time.sleep(30)
+            else:
+                raise
+
 existing = [e for e in w.serving_endpoints.list() if e.name == ENDPOINT]
 if not existing:
     print("creating endpoint", ENDPOINT)
-    w.serving_endpoints.create(name=ENDPOINT, config=cfg)
+    with_conflict_retry(lambda: w.serving_endpoints.create(name=ENDPOINT, config=cfg), "create")
 else:
     print("updating endpoint", ENDPOINT)
-    w.serving_endpoints.update_config(name=ENDPOINT, served_entities=cfg.served_entities)
+    with_conflict_retry(lambda: w.serving_endpoints.update_config(
+        name=ENDPOINT, served_entities=cfg.served_entities), "update")
 
-# AI Gateway inference tables (legacy auto_capture_config is deprecated)
-print("enabling AI Gateway inference table")
-resp = w.api_client.do(
-    "PUT", f"/api/2.0/serving-endpoints/{ENDPOINT}/ai-gateway",
-    body={"inference_table_config": {
-        "catalog_name": CATALOG,
-        "schema_name": SCHEMA,
-        "table_name_prefix": "cr_ranker_inference",
-        "enabled": True,
-    }},
-)
-print("ai-gateway config applied:", resp)
 # COMMAND ----------
 import time, json
 for i in range(90):
@@ -72,6 +74,29 @@ for i in range(90):
     if state == "READY" and str(cfg_state) in ("NOT_UPDATING", ""):
         break
     time.sleep(20)
+
+# AI Gateway inference tables (legacy auto_capture_config is deprecated).
+# Must run once served-entity updates settle, else ResourceConflict.
+print("enabling AI Gateway inference table")
+for attempt in range(10):
+    try:
+        resp = w.api_client.do(
+            "PUT", f"/api/2.0/serving-endpoints/{ENDPOINT}/ai-gateway",
+            body={"inference_table_config": {
+                "catalog_name": CATALOG,
+                "schema_name": SCHEMA,
+                "table_name_prefix": "cr_ranker_inference",
+                "enabled": True,
+            }},
+        )
+        print("ai-gateway config applied:", resp)
+        break
+    except Exception as e:
+        if "ResourceConflict" in type(e).__name__ and attempt < 9:
+            print(f"[{attempt}] entities still updating, retry in 30s")
+            time.sleep(30)
+        else:
+            raise
 
 ep = w.serving_endpoints.get(ENDPOINT)
 print("endpoint url:", ep.url if hasattr(ep, "url") else f"{w.config.host}/serving-endpoints/{ENDPOINT}/invocations")

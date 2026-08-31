@@ -175,9 +175,9 @@ registers it in Unity Catalog **with the feature spec inside**:
 - 33 numeric + 4 categorical features across viewer, recent-behavior, title and context classes
 - Self-contained pyfunc: request keys + context in, play-start probability out
 
-![Training run + registered model](images/07-training-auc.png)
+![Model version page: logged holdout AUC metric and the feature-spec signature](images/08b-model-version-spec.png)
 
-![Registered model with feature spec](images/08-model-registry.png)
+![Registered model in Unity Catalog](images/08-model-registry.png)
 
 ## Step 3 · Deploy — the endpoint fetches its own features
 
@@ -207,10 +207,15 @@ all 25 in one pass, returns play-start probabilities:
 
 ![Ranked output](images/10-query-ranked.png)
 
-Measured on the live workspace:
+Measured on the live workspace (2026-08-31):
 
-- Endpoint query (25 candidates, one request): **{{QUERY_MS}} ms**
-- Keyed reads against the online store: **p50 {{P50}} ms · p95 {{P95}} ms**
+- Endpoint query (25 candidates, one request, warm): **206 ms** — includes the
+  automatic feature lookups against Lakebase
+- Direct Postgres keyed read via `scripts/lakebase_explore.sh`: ~240 ms from a
+  laptop, network included
+- SQL-console reads of online tables show p50 ~1 s — that is serverless SQL
+  planning overhead, not the serving path; the endpoint fetches keyed values
+  directly
 
 Say:
 > "The app sends what only it knows. Everything else is a governed lookup.
@@ -223,15 +228,20 @@ Say:
 
 `05_freshness_demo.py` runs the deck's Phase 3 story in miniature:
 
-1. Baseline query for viewer `v0001`
+1. Viewer `v0001` reset to a calm baseline (slice-of-life, 38.5 min/24h) so the
+   demo is repeatable, then a baseline query
 2. Three sci-fi episodes complete *right now* → events appended
 3. `recent_behavior_current` recomputed for that viewer, re-published (TRIGGERED)
-4. Same 25 candidates re-queried
+4. Same 25 candidates re-queried — **116 ms**, warm
 
 ![Before/after movers](images/12-freshness-before-after.png)
 
-Result: `minutes_watched_24h` jumps, `last_primary_genre` flips to `sci_fi`,
-and sci-fi candidates climb the ranking — everything else holds.
+Real result from the live run: `minutes_watched_24h` jumps to 288.8 and
+`last_primary_genre` flips to `sci_fi`; every candidate re-scores. Biggest
+movers climb up to **+0.055** (Call of the Night Season 2, Horimiya,
+Rent-a-Girlfriend S4) while the previous #1 (The Beginning After the End)
+dips −0.017 — the top pick happened to hold this run, but the ranking
+underneath moved within seconds of the events landing.
 
 Say:
 > "Production runs this exact contract streaming — Kafka, Spark Real-Time

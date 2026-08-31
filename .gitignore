@@ -5,3 +5,4 @@ __pycache__/
 .databricks/
 secrets.env
 .env
+.claude/

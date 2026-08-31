@@ -4,16 +4,18 @@
 # MAGIC
 # MAGIC The deck's Phase 3 story, shrunk to minutes:
 # MAGIC
-# MAGIC 1. Baseline: query the ranker for one viewer.
+# MAGIC 1. Reset the viewer to a calm baseline (repeatable), query the ranker.
 # MAGIC 2. Simulate an in-session burst: the viewer binges sci-fi episodes right now.
 # MAGIC 3. Recompute `recent_behavior_current`, re-publish to Lakebase (TRIGGERED).
-# MAGIC 4. Query again — sci-fi candidates move, everything else holds.
+# MAGIC 4. Query again — every candidate re-scores on the fresh features.
 # MAGIC
 # MAGIC Production swaps steps 2–3 for Kafka → Spark Real-Time Mode → Lakebase
 # MAGIC (200 ms p99 published benchmark). The demo shows the same contract end
 # MAGIC to end: event → feature → online store → different score.
 # COMMAND ----------
-# MAGIC %pip install databricks-feature-engineering databricks-sdk --quiet
+# MAGIC %pip install databricks-sdk --quiet
+# COMMAND ----------
+# MAGIC %pip install databricks-feature-engineering --quiet
 # COMMAND ----------
 dbutils.library.restartPython()
 # COMMAND ----------
@@ -31,6 +33,26 @@ w = WorkspaceClient()
 fe = FeatureEngineeringClient()
 
 VID = "v0001"
+
+# Reset the demo viewer to a calm baseline so the loop is repeatable:
+# yesterday's v0001 was watching slice-of-life, not sci-fi.
+calm = pd.DataFrame([{
+    "viewer_id": VID,
+    "minutes_watched_24h": 38.5,
+    "skips_24h": 0,
+    "active_titles_24h": 2,
+    "last_primary_genre": "slice_of_life",
+}])
+fe.write_table(name=f"{CATALOG}.{SCHEMA}.recent_behavior_current",
+               df=spark.createDataFrame(calm), mode="merge")
+fe.publish_table(
+    online_store=fe.get_online_store(name=ONLINE_STORE),
+    source_table_name=f"{CATALOG}.{SCHEMA}.recent_behavior_current",
+    online_table_name=f"{CATALOG}.{SCHEMA}.online_recent_behavior",
+    publish_mode="TRIGGERED",
+)
+print("baseline reset published; waiting for sync...")
+time.sleep(90)
 
 def query_ranker(records):
     t0 = time.time()
@@ -131,7 +153,7 @@ print(moved[["title_name", "primary_genre", "score_before", "score_after", "delt
 top_before = candidates.loc[candidates["score_before"].idxmax(), "title_name"]
 top_after = candidates.loc[candidates["score_after"].idxmax(), "title_name"]
 print(f"\nTop pick before: {top_before}\nTop pick after:  {top_after}")
-
+# COMMAND ----------
 dbutils.notebook.exit(json.dumps({
     "viewer": VID,
     "top_before": str(top_before), "top_after": str(top_after),

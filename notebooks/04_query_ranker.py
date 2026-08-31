@@ -81,13 +81,9 @@ tables = [r.tableName for r in spark.sql(
 print("inference tables:", tables)
 payload_tbl = next((t for t in tables if t.endswith("_payload")), tables[0] if tables else None)
 if payload_tbl:
-    captured = spark.sql(f"""
-      SELECT request_id, status_code, request_metadata, request, response
-      FROM {CATALOG}.{SCHEMA}.{payload_tbl}
-      ORDER BY request_time DESC LIMIT 3
-    """)
+    captured = spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA}.{payload_tbl} LIMIT 3")
     display(captured)
-    print("payload table:", payload_tbl)
+    print("payload table:", payload_tbl, "| columns:", captured.columns, "| rows:", captured.count())
 
 dbutils.notebook.exit(json.dumps({
     "endpoint_query_ms": round(query_ms),
