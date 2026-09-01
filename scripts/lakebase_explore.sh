@@ -7,11 +7,15 @@
 # the same values Model Serving reads at request time.
 #
 # Usage:
-#   ./scripts/lakebase_explore.sh [profile]
+#   ./scripts/lakebase_explore.sh <cli-profile> <catalog>
 # Requires: databricks CLI v1.x authenticated, psql client (brew install postgresql@16)
 
 set -euo pipefail
-PROFILE="${1:-fe-vm-lakebase-praneeth}"
+if [ $# -lt 2 ]; then
+  echo "usage: $0 <cli-profile> <catalog>" >&2
+  exit 1
+fi
+PROFILE="$1"
 
 echo "== Lakebase projects in workspace =="
 databricks postgres list-projects -p "$PROFILE" -o json \
@@ -19,7 +23,7 @@ databricks postgres list-projects -p "$PROFILE" -o json \
 
 echo
 PROJECT="${PROJECT:-crunchyroll-online-store}"
-DB="${DB:-serverless_lakebase_praneeth_catalog}"
+DB="$2"
 
 BRANCH="${BRANCH:-production}"
 ENDPOINT="${ENDPOINT:-primary}"

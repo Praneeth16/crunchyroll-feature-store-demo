@@ -3,7 +3,7 @@
 # MAGIC # 00 · Synthetic Crunchyroll data
 # MAGIC
 # MAGIC Builds the raw signals the whole demo stands on, in
-# MAGIC `serverless_lakebase_praneeth_catalog.crunchyroll_demo`:
+# MAGIC a Unity Catalog schema `crunchyroll_demo` (set the `catalog` widget):
 # MAGIC
 # MAGIC | Table | Grain | Contents |
 # MAGIC |---|---|---|
@@ -16,7 +16,8 @@
 # MAGIC notebook 02 has real signal to learn — affinity match, popularity and
 # MAGIC recency all move the play probability.
 # COMMAND ----------
-CATALOG = "serverless_lakebase_praneeth_catalog"
+dbutils.widgets.text("catalog", "serverless_lakebase_praneeth_catalog")
+CATALOG = dbutils.widgets.get("catalog")
 SCHEMA = "crunchyroll_demo"
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.{SCHEMA}")
 spark.sql(f"USE {CATALOG}.{SCHEMA}")

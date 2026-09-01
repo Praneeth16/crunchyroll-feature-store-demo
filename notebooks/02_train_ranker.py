@@ -18,10 +18,11 @@
 # COMMAND ----------
 dbutils.library.restartPython()
 # COMMAND ----------
-CATALOG = "serverless_lakebase_praneeth_catalog"
+dbutils.widgets.text("catalog", "serverless_lakebase_praneeth_catalog")
+CATALOG = dbutils.widgets.get("catalog")
 SCHEMA = "crunchyroll_demo"
 MODEL = f"{CATALOG}.{SCHEMA}.crunchyroll_ranker"
-EXPERIMENT = "/Users/praneeth.paikray@databricks.com/crunchyroll_ranker_experiment"
+EXPERIMENT = f"/Users/{spark.sql('SELECT current_user()').first()[0]}/crunchyroll_ranker_experiment"
 
 spark.sql(f"USE {CATALOG}.{SCHEMA}")
 

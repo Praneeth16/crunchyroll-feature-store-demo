@@ -2,7 +2,7 @@
 
 30 minutes · customer-facing · Databricks Feature Engineering in Unity Catalog + Lakebase Online Feature Store + Model Serving
 
-**From viewer signals to the next best anime.** This repo builds a complete,
+**From viewer signals to the next best anime.** This repo is a complete,
 runnable content-recommendation pipeline for a Crunchyroll scenario on a live
 Databricks workspace: synthetic engagement events land in Unity Catalog, one
 set of feature definitions produces point-in-time training data offline and
@@ -10,8 +10,26 @@ latest keyed values in a Lakebase-backed online store, and a registered
 ranking model serves personalized "watch next" lists through automatic
 feature lookup — with every decision captured for the learning loop.
 
-Everything below already ran on the workspace. The screenshots are real, the
-endpoint is live, and the notebooks can be re-run top to bottom.
+Everything below already ran on a live workspace. The screenshots are real,
+the endpoint is live, and the notebooks can be re-run top to bottom.
+
+## Contents
+
+1. [The story in one breath](#the-story-in-one-breath)
+2. [Architecture](#architecture)
+3. [What got built](#what-got-built)
+4. [Run order](#run-order)
+5. Walkthrough
+   - [Step 0 · Data curation](#step-0--data-curation--synthetic-crunchyroll-signals-land-in-unity-catalog)
+   - [Step 1 · Feature engineering](#step-1--feature-engineering--define-features-once--two-stores-two-jobs)
+   - [Step 2 · Training](#step-2--training--point-in-time-correct-no-leakage-by-construction)
+   - [Step 3 · Deployment](#step-3--deployment--the-endpoint-fetches-its-own-features)
+   - [Step 4 · Inference](#step-4--inference--one-governed-api--keys-and-context-in-ranked-titles-out)
+   - [Step 5 · Freshness loop](#step-5--freshness-loop--a-binge-should-change-the-next-ranking)
+   - [Step 6 · Learning loop](#step-6--the-learning-loop)
+6. [Operating notes for production](#operating-notes-for-the-production-conversation)
+7. [Live-demo fallbacks](#fast-fallbacks-live-demo-insurance)
+8. [Going deeper](#going-deeper--the-documentation-as-a-map)
 
 ---
 
@@ -69,37 +87,40 @@ The Crunchyroll feature map — freshness is chosen **per feature class**, never
 | Request-time context | sent in the request | surface, device, locale, hour | Reconstructed for eval | Supplied by the app |
 | Policy & entitlement | `entitlements` | territory, tier, maturity | — | Hard filter before scoring |
 
-## What got built (workspace: `fevm-serverless-lakebase-praneeth`, AWS us-east-1)
+## What got built
 
 | Layer | Object | Location |
 |---|---|---|
-| Raw signals | `titles` (132), `viewers` (300), `entitlements`, `engagement_events` | `serverless_lakebase_praneeth_catalog.crunchyroll_demo` |
+| Raw signals | `titles` (132), `viewers` (300), `entitlements`, `engagement_events` | Unity Catalog schema `crunchyroll_demo` |
 | Feature tables | `viewer_features_ts`, `viewer_features_current`, `title_features`, `recent_behavior_current` | same schema |
 | Online store | `crunchyroll-online-store` (Lakebase Autoscaling, CU_2) | Lakebase project |
 | Online tables | `online_viewer_features`, `online_title_features`, `online_recent_behavior` | same schema |
 | Model | `crunchyroll_ranker` v1 — holdout AUC 0.6643 | UC model registry |
 | Endpoint | `crunchyroll-watch-next-ranker` + inference table `cr_ranker_inference_payload` | Model Serving |
 
-## Before the demo (prerequisites)
+## Run order
 
-- Databricks CLI profile `fe-vm-lakebase-praneeth` (serverless workspace, Lakebase enabled)
-- Serverless compute — every notebook runs as a one-click job, no cluster config
-- ~35 min for a full rebuild; ~30 min to present
+Prerequisites: a serverless Databricks workspace with Lakebase (Online
+Feature Store) enabled, and the Databricks CLI configured against it. Every
+notebook runs as a one-click job on serverless compute — no cluster config.
+~35 min for a full rebuild; ~30 min to present.
 
-Run order (each is a notebook in `notebooks/`, importable as-is):
+Each is a notebook in `notebooks/`, importable as-is. Every notebook takes a
+`catalog` widget (top of the notebook) — point it at any catalog where you
+have create rights; the default is the demo author's:
 
-| # | Notebook | What it does | Runtime |
-|---|---|---|---|
-| 0 | `00_data_generation.py` | Synthetic catalog, viewers, entitlements, 90 days of engagement | ~2 min |
-| 1 | `01_feature_engineering.py` | Feature tables → online store → publish | ~8 min |
-| 2 | `02_train_ranker.py` | PIT proof, train ranker, `log_model` with feature spec | ~4 min |
-| 3 | `03_deploy_endpoint.py` | Serving endpoint with inference tables | ~8 min |
-| 4 | `04_query_ranker.py` | Keys + context in → ranked titles out; latency | ~2 min |
-| 5 | `05_freshness_demo.py` | In-session burst → re-publish → ranking moves | ~4 min |
+| # | Lifecycle stage | Notebook | What it does | Runtime |
+|---|---|---|---|---|
+| 0 | Data curation | `00_data_generation.py` | Synthetic catalog, viewers, entitlements, 90 days of engagement | ~2 min |
+| 1 | Feature engineering | `01_feature_engineering.py` | Feature tables → online store → publish | ~8 min |
+| 2 | Training | `02_train_ranker.py` | PIT proof, train ranker, `log_model` with feature spec | ~4 min |
+| 3 | Deployment | `03_deploy_endpoint.py` | Serving endpoint with inference tables | ~8 min |
+| 4 | Inference | `04_query_ranker.py` | Keys + context in → ranked titles out; latency | ~2 min |
+| 5 | Freshness | `05_freshness_demo.py` | In-session burst → re-publish → ranking moves | ~4 min |
 
 ---
 
-## Step 0 · Synthetic Crunchyroll signals land in Unity Catalog
+## Step 0 · Data curation — synthetic Crunchyroll signals land in Unity Catalog
 
 132 recognizable anime titles (Attack on Titan to Gachiakuta), 300 viewers
 with latent genre affinities, an entitlement matrix (tier × territory ×
@@ -117,7 +138,7 @@ Say:
 > signals any media company already has — viewing events, catalog metadata,
 > entitlements. The feature store starts from here."
 
-## Step 1 · Define features once — two stores, two jobs
+## Step 1 · Feature engineering — define features once, two stores, two jobs
 
 `01_feature_engineering.py` builds four feature tables. The viewer table
 exists in two forms: daily **snapshots** for point-in-time training, and a
@@ -142,12 +163,15 @@ next to any other Lakebase database:
 
 ![Lakebase project](images/13-lakebase-project.png)
 
+`capacity="CU_2"` is the online-store size class; the Lakebase project view
+shows the backing endpoint's autoscaling bounds.
+
 ```bash
 # Read online features straight from Postgres (scripts/lakebase_explore.sh)
-PROJECT=<online-store-project> ./scripts/lakebase_explore.sh
+./scripts/lakebase_explore.sh <cli-profile> <catalog>
 ```
 
-## Step 2 · Point-in-time training — no leakage, by construction
+## Step 2 · Training — point-in-time correct, no leakage by construction
 
 `02_train_ranker.py` opens with the proof. A sample of impressions is joined
 against `viewer_features_ts` with `timestamp_lookup_key="ts"`, and the
@@ -156,10 +180,10 @@ notebook prints feature values **at impression time** next to today's values:
 ![PIT proof output](images/06-pit-proof.png)
 
 ```
-viewer  impression_ts        affinity_action@impression  affinity_action@now  minutes_7d@impression  minutes_7d@now
-v0101   2026-07-05 13:30     0.112                       0.042                107.5                  50.7
-v0262   2026-08-20 21:24     0.000                       0.000                136.2                  0.0
-v0004   2026-08-02 11:36     0.000                       0.000                135.1                  31.8
+viewer_id  event_ts             aff_action_pit  aff_action_now  min7d_pit  min7d_now
+v0101      2026-07-05 13:30:00  0.112           0.042           107.5      50.7
+v0262      2026-08-20 21:24:00  0.000           0.000           136.2      0.0
+v0004      2026-08-02 11:36:00  0.000           0.000           135.1      31.8
 ```
 
 Say:
@@ -175,11 +199,9 @@ registers it in Unity Catalog **with the feature spec inside**:
 - 33 numeric + 4 categorical features across viewer, recent-behavior, title and context classes
 - Self-contained pyfunc: request keys + context in, play-start probability out
 
-![Model version page: logged holdout AUC metric and the feature-spec signature](images/08b-model-version-spec.png)
+![Model version page: holdout AUC 0.6643 and the served input signature — request keys plus looked-up features](images/08b-model-version-spec.png)
 
-![Registered model in Unity Catalog](images/08-model-registry.png)
-
-## Step 3 · Deploy — the endpoint fetches its own features
+## Step 3 · Deployment — the endpoint fetches its own features
 
 `03_deploy_endpoint.py` creates `crunchyroll-watch-next-ranker` (workload
 Small, inference tables enabled). No serving code touches a feature table —
@@ -192,7 +214,7 @@ Say:
 > learns where features live. That is the stitching mechanism: the model
 > carries its dependencies."
 
-## Step 4 · One governed API — keys and context in, ranked titles out
+## Step 4 · Inference — one governed API, keys and context in, ranked titles out
 
 `04_query_ranker.py` plays the application. For the most active adult viewer
 it pulls 25 entitlement-eligible candidates and sends only this:
@@ -222,7 +244,7 @@ Say:
 > Ranked titles come back with scores — and the decision is already being
 > logged."
 
-![Inference table rows](images/11-inference-table.png)
+![Inference table rows: every request captured with status 200, 21–41 ms model execution, and the raw request payload](images/11-inference-table.png)
 
 ## Step 5 · Freshness loop — a binge should change the next ranking
 
@@ -233,6 +255,12 @@ Say:
 2. Three sci-fi episodes complete *right now* → events appended
 3. `recent_behavior_current` recomputed for that viewer, re-published (TRIGGERED)
 4. Same 25 candidates re-queried — **116 ms**, warm
+
+The online row itself, before and after the burst:
+
+![Online recent_behavior before (38.5 min, slice_of_life) and after (288.8 min, sci_fi)](images/14-freshness-features.png)
+
+And the effect on the ranking:
 
 ![Before/after movers](images/12-freshness-before-after.png)
 
@@ -273,7 +301,7 @@ distributions — the monitoring layers from the deck, wired by default.
 ## Repo layout
 
 ```
-notebooks/    00–05, the full pipeline (import into the workspace, run in order)
+notebooks/    00–05, the full pipeline (import into a workspace, run in order)
 scripts/      lakebase_explore.sh — psql into the online store's Lakebase instance
 artifacts/    demo_script.md — 9-beat live walkthrough with Say-cues
 images/       real screenshots from the workspace
@@ -314,5 +342,4 @@ store story and architecture follow the Crunchyroll Feature Store → Model
 Serving deck (Aug 2026). The 200 ms p99 figure is a published engineering
 benchmark from Kafka event to online-store availability — validate latency on
 your own model and traffic profile before committing targets. Screenshots
-captured from `fevm-serverless-lakebase-praneeth.cloud.databricks.com` on
-2026-08-31.
+captured from a live Databricks serverless workspace on 2026-08-31.

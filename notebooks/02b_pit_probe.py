@@ -1,6 +1,7 @@
 # Databricks notebook source
 # PIT probe: for 5 real impressions, compare viewer features at impression time (viewer_features_ts) vs today (viewer_features_current)
-CATALOG = "serverless_lakebase_praneeth_catalog"
+dbutils.widgets.text("catalog", "serverless_lakebase_praneeth_catalog")
+CATALOG = dbutils.widgets.get("catalog")
 SCHEMA = "crunchyroll_demo"
 spark.sql(f"USE {CATALOG}.{SCHEMA}")
 import json
@@ -33,6 +34,7 @@ WHERE p.rn = 1
 """).collect()
 
 out = [r.asDict() for r in rows]
-for r in out:
-    print(r)
+import pandas as pd
+print(pd.DataFrame(out).to_string(index=False))
+# COMMAND ----------
 dbutils.notebook.exit(json.dumps(out))

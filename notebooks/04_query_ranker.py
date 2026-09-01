@@ -14,7 +14,8 @@
 # COMMAND ----------
 dbutils.library.restartPython()
 # COMMAND ----------
-CATALOG = "serverless_lakebase_praneeth_catalog"
+dbutils.widgets.text("catalog", "serverless_lakebase_praneeth_catalog")
+CATALOG = dbutils.widgets.get("catalog")
 SCHEMA = "crunchyroll_demo"
 ENDPOINT = "crunchyroll-watch-next-ranker"
 spark.sql(f"USE {CATALOG}.{SCHEMA}")

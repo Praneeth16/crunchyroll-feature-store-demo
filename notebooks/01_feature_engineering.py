@@ -19,7 +19,8 @@
 # COMMAND ----------
 dbutils.library.restartPython()
 # COMMAND ----------
-CATALOG = "serverless_lakebase_praneeth_catalog"
+dbutils.widgets.text("catalog", "serverless_lakebase_praneeth_catalog")
+CATALOG = dbutils.widgets.get("catalog")
 SCHEMA = "crunchyroll_demo"
 ONLINE_STORE = "crunchyroll-online-store"
 
