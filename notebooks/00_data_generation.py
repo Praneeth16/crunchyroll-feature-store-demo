@@ -11,17 +11,24 @@
 # MAGIC | `viewers` | viewer_id | Profile: country, language, tier, age bracket |
 # MAGIC | `entitlements` | viewer_id × title_id | Territory / subscription hard-filter flag |
 # MAGIC | `engagement_events` | event | impressions (with play-outcome label), skips, completes |
+# MAGIC | `engagement_events_stream` | event | empty on creation; the live feed notebooks 10/11 use |
 # MAGIC
 # MAGIC Events are generated with latent genre affinities, so the ranking model in
 # MAGIC notebook 02 has real signal to learn — affinity match, popularity and
 # MAGIC recency all move the play probability.
 # COMMAND ----------
-dbutils.widgets.text("catalog", "serverless_lakebase_praneeth_catalog")
-CATALOG = dbutils.widgets.get("catalog")
-SCHEMA = "crunchyroll_demo"
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.{SCHEMA}")
-spark.sql(f"USE {CATALOG}.{SCHEMA}")
-print("target:", f"{CATALOG}.{SCHEMA}")
+import os, sys
+_root = os.path.abspath(os.path.join(os.getcwd(), ".."))
+if _root not in sys.path:
+    sys.path.insert(0, _root)
+from src.crfs.config import Config
+
+cfg = Config.from_widgets(dbutils)
+CATALOG, SCHEMA = cfg.catalog, cfg.schema
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {cfg.fq}")
+spark.sql(f"USE {cfg.fq}")
+print("target:", cfg.fq)
+print(cfg.describe())
 # COMMAND ----------
 import random, math, datetime as dt
 import pandas as pd
@@ -32,8 +39,12 @@ random.seed(SEED)
 np.random.seed(SEED)
 
 DAYS = 90
-END_DATE = dt.date(2026, 8, 31)
+# History ends yesterday unless the end_date widget pins it. The first version of
+# this demo hardcoded 2026-08-31, so by the time it was presented the "last 24h"
+# online features were a week older than the wall clock the freshness demo used.
+END_DATE = cfg.end_date_resolved
 START_DATE = END_DATE - dt.timedelta(days=DAYS - 1)
+print("history window:", START_DATE, "->", END_DATE)
 
 GENRES = ["action", "adventure", "fantasy", "sci_fi", "sports", "drama", "romance", "slice_of_life"]
 MATURITY = ["all", "13+", "16+", "18+"]
@@ -350,6 +361,47 @@ for name, sdf in tables.items():
     spark.sql(f"ALTER TABLE {CATALOG}.{SCHEMA}.{name} SET TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')")
     print(f"table {name}: {spark.table(f'{CATALOG}.{SCHEMA}.{name}').count()} rows")
 # COMMAND ----------
-display(spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA}.engagement_events ORDER BY event_ts DESC LIMIT 10"))
+# MAGIC %md
+# MAGIC ## The live-events table — where the streaming demo lands
+# MAGIC
+# MAGIC `engagement_events_stream` starts empty and stays separate from the 90-day
+# MAGIC history. Notebook 11 produces into it, notebook 10 aggregates it into
+# MAGIC session features and syncs those to Lakebase continuously.
+# MAGIC
+# MAGIC Keeping it separate is deliberate: appending live demo events into
+# MAGIC `engagement_events` would mutate the training corpus every time anyone ran
+# MAGIC the freshness beat, so training would stop being reproducible.
+# MAGIC
+# MAGIC `produced_epoch_ms` is the producer's own clock, carried all the way to the
+# MAGIC online store. Subtracting two readings of that one clock is how freshness
+# MAGIC gets measured without a clock-skew argument.
 # COMMAND ----------
-dbutils.notebook.exit("OK: raw crunchyroll_demo tables ready")
+spark.sql(f"""
+CREATE TABLE IF NOT EXISTS {cfg.t('engagement_events_stream')} (
+  event_id STRING,
+  viewer_id STRING,
+  title_id STRING,
+  event_ts TIMESTAMP,
+  event_type STRING,
+  watch_seconds DOUBLE,
+  surface STRING,
+  device STRING,
+  locale STRING,
+  produced_epoch_ms BIGINT
+) TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')
+""")
+print("engagement_events_stream rows:", spark.table(cfg.t("engagement_events_stream")).count())
+# COMMAND ----------
+display(spark.sql(f"SELECT * FROM {cfg.t('engagement_events')} ORDER BY event_ts DESC LIMIT 10"))
+# COMMAND ----------
+import json
+
+max_ts = spark.sql(f"SELECT MAX(event_ts) AS m FROM {cfg.t('engagement_events')}").first()["m"]
+dbutils.notebook.exit(json.dumps({
+    "schema": cfg.fq,
+    "end_date": str(END_DATE),
+    "max_event_ts": str(max_ts),
+    "titles": spark.table(cfg.t("titles")).count(),
+    "viewers": spark.table(cfg.t("viewers")).count(),
+    "events": spark.table(cfg.t("engagement_events")).count(),
+}))

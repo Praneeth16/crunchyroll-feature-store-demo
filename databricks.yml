@@ -1,0 +1,99 @@
+# Crunchyroll Feature Store on Lakebase -- one bundle, one deploy.
+#
+# What this bundle owns: jobs and their DAG, the checkpoint volume, the model
+# shells, the dashboard, and the app plus its permission grants.
+#
+# What it deliberately does NOT own:
+#   * the online store itself -- there is no DAB resource for it, and
+#     fe.create_online_store (notebook 01) must own the Lakebase project so the
+#     feature store's serving metadata resolves.
+#   * postgres_projects -- declaring the project the feature store owns produces
+#     permanent field drift, and `bundle destroy` could delete the online store
+#     out from under the published tables. Endpoint sizing is done with
+#     `databricks postgres update-endpoint` from scripts/preflight.sh instead.
+#   * the published online tables -- do NOT create these with
+#     postgres_synced_tables. A raw synced table is not registered as a
+#     feature-store online table, so automatic feature lookup will not resolve it
+#     at serving time. fe.publish_table owns them.
+#   * feature specs and feature serving endpoints -- no DAB resource key exists.
+bundle:
+  name: crunchyroll-feature-store
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: UC catalog holding every demo object.
+    default: serverless_lakebase_praneeth_catalog
+  schema:
+    description: UC schema holding every demo object.
+    default: crunchyroll_demo
+  online_store:
+    description: Online Feature Store name. DNS-compliant -- lowercase, hyphens, no underscores.
+    default: crunchyroll-online-store
+  online_capacity:
+    description: Online store capacity class. CU_N gives the Lakebase endpoint a 4N CU floor.
+    default: CU_1
+  lakebase_project:
+    default: crunchyroll-online-store
+  lakebase_branch:
+    default: production
+  lakebase_endpoint:
+    default: primary
+  lakebase_db_resource:
+    description: >-
+      Full Lakebase database resource path for the app's postgres resource. The id
+      is generated at project creation, so scripts/preflight.sh discovers it --
+      never guess this value.
+    default: projects/crunchyroll-online-store/branches/production/databases/db-p78x-mcrka97vph
+  ranker_endpoint:
+    default: crunchyroll-watch-next-ranker
+  retriever_endpoint:
+    default: crunchyroll-candidate-retriever
+  feature_endpoint:
+    default: crunchyroll-viewer-features
+  agent_endpoint:
+    default: crunchyroll-explainer-agent
+  llm_endpoint:
+    description: Databricks-hosted chat model backing the explainer agent.
+    default: databricks-claude-sonnet-4-5
+  warehouse_id:
+    default: 4d39ac2e32b72a3a
+  app_name:
+    description: Databricks App name. Lowercase and dashes only.
+    default: crfs-watch-next
+  volume:
+    default: crfs_ops
+  end_date:
+    description: Last day of generated history. Empty means yesterday.
+    default: ""
+  notification_email:
+    default: praneeth.paikray@databricks.com
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://fevm-serverless-lakebase-praneeth.cloud.databricks.com
+    # dev and prod deliberately target the SAME schema, online store and
+    # endpoints. This is a single-workspace demo: a second schema would mean a
+    # second set of published online tables on the same always-on Lakebase store,
+    # a second full rebuild, and verification runs that do not exercise what the
+    # demo actually shows. `mode: development` still prefixes job and app names
+    # with the deployer, which is the isolation that matters here.
+    #
+    # A customer who wants true isolation overrides `schema` and the four
+    # endpoint names per target -- every one of them is already a variable.
+
+  prod:
+    mode: production
+    workspace:
+      host: https://fevm-serverless-lakebase-praneeth.cloud.databricks.com
+      root_path: /Workspace/Users/praneeth.paikray@databricks.com/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      schema: crunchyroll_demo
+    permissions:
+      - level: CAN_MANAGE
+        user_name: praneeth.paikray@databricks.com

@@ -23,9 +23,7 @@
 # MAGIC measurable later — when the online store reads this value, we subtract it
 # MAGIC from the current time to measure end-to-end latency. No clock skew, no guessing.
 # COMMAND ----------
-# MAGIC %pip install databricks-sdk --quiet
-# MAGIC # COMMAND ----------
-# MAGIC %pip install databricks-feature-engineering --quiet
+# MAGIC %pip install databricks-sdk databricks-feature-engineering --quiet
 # COMMAND ----------
 dbutils.library.restartPython()
 # COMMAND ----------
@@ -66,8 +64,16 @@ print(f"  Catalog: {cfg.catalog}, Schema: {cfg.schema}")
 # MAGIC %md
 # MAGIC ## Setup: create the stream table if missing
 
-# Create engagement_events_stream if missing, with CDF enabled
-spark.sql(f"""
+# COMMAND ----------
+# Notebook 00 owns this table. Only issue DDL if it is genuinely absent -- running
+# CREATE TABLE here against an existing managed table failed with
+# INVALID_PARAMETER_VALUE "Missing cloud file system scheme".
+STREAM_TABLE = cfg.t("engagement_events_stream")
+if spark.catalog.tableExists(STREAM_TABLE):
+    print(f"{STREAM_TABLE} present ({spark.table(STREAM_TABLE).count()} rows)")
+else:
+    print(f"{STREAM_TABLE} missing - creating it")
+    spark.sql(f"""
 CREATE TABLE IF NOT EXISTS {cfg.t('engagement_events_stream')} (
   event_id STRING,
   viewer_id STRING,
@@ -86,6 +92,7 @@ TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'true'
 )
 """)
+    spark.sql(f"ALTER TABLE {STREAM_TABLE} SET TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')")
 
 spark.sql(f"ALTER TABLE {cfg.t('engagement_events_stream')} SET TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')")
 
@@ -95,11 +102,12 @@ print(f"Stream table ready: {cfg.t('engagement_events_stream')}")
 # MAGIC %md
 # MAGIC ## Load reference data for event generation
 
+# COMMAND ----------
 # Titles for burst events — pick popular simulcasts that will flip the viewer's genre
 titles_df = spark.sql(f"""
   SELECT title_id, title_name, primary_genre, is_simulcast, intrinsic_popularity
   FROM {cfg.t('titles')}
-  WHERE is_simulcast = 1 AND primary_genre IN ('sci_fi', 'action')
+  WHERE is_simulcast AND primary_genre IN ('sci_fi', 'action')
   ORDER BY intrinsic_popularity DESC
   LIMIT 5
 """).toPandas()
@@ -115,6 +123,7 @@ print(titles_df[["title_name", "primary_genre", "intrinsic_popularity"]])
 # MAGIC %md
 # MAGIC ## Mode: burst
 
+# COMMAND ----------
 def burst_events(viewer_id, n_events):
     """Emit n_events completed watches for a viewer, using the most popular sci-fi titles."""
     now = datetime.now()
@@ -142,6 +151,7 @@ def burst_events(viewer_id, n_events):
 # MAGIC %md
 # MAGIC ## Mode: loop
 
+# COMMAND ----------
 def loop_events(events_per_second, duration_minutes):
     """Emit background traffic across random viewers for duration_minutes."""
     start = time.time()
@@ -191,6 +201,7 @@ def loop_events(events_per_second, duration_minutes):
 # MAGIC %md
 # MAGIC ## Mode: Zerobus (optional, with error isolation)
 
+# COMMAND ----------
 def zerobus_events(viewer_id, n_events):
     """Attempt to push events via Zerobus gRPC SDK. Failure is isolated."""
     try:
@@ -232,10 +243,11 @@ def zerobus_events(viewer_id, n_events):
 # MAGIC %md
 # MAGIC ## Execute the chosen mode
 
+# COMMAND ----------
 mode = cfg.extras["mode"]
 n_events = int(cfg.extras["n_events"])
 duration_minutes = int(cfg.extras["duration_minutes"])
-events_per_second = float(cfg.extras["events_per_second"])
+events_per_second = int(float(cfg.extras["events_per_second"]))
 viewer_id = cfg.extras["viewer_id"]
 
 result = {

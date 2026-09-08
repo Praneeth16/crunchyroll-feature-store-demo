@@ -1,0 +1,7 @@
+resources:
+  dashboards:
+    crfs_feature_ops:
+      display_name: Crunchyroll Feature Store - serving, freshness and cost
+      file_path: ../dashboards/crfs_feature_ops.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      parent_path: /Workspace/Users/praneeth.paikray@databricks.com

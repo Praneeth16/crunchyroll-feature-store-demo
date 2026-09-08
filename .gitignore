@@ -3,6 +3,10 @@ __pycache__/
 .DS_Store
 .ipynb_checkpoints/
 .databricks/
+.isaac/
+dist/
+build/
+app/.venv/
 secrets.env
 .env
 .claude/

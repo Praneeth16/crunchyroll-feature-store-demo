@@ -1,0 +1,25 @@
+# Storage.
+#
+# The volume exists because streaming needs a real checkpoint path and this schema
+# had none.
+#
+# There is deliberately NO `registered_models` block. It looks tempting -- declare
+# the three models so grants can be applied before training runs -- but
+# `mode: development` prefixes the resource name, and a registered model's name is
+# a three-level UC name, so the prefix lands in front of the catalog:
+#
+#   CreateRegisteredModel name "dev_praneeth_paikray_serverless_lakebase_...
+#   .crunchyroll_demo.crunchyroll_ranker" is not a valid name
+#
+# Even with the leaf-name form the prefix produces a *different* model from the one
+# `fe.log_model(registered_model_name=cfg.t("crunchyroll_ranker"))` creates, so the
+# shells would sit empty next to the real models. The notebooks own model
+# registration; UC inherits grants from the schema.
+resources:
+  volumes:
+    crfs_ops:
+      catalog_name: ${var.catalog}
+      schema_name: ${var.schema}
+      name: ${var.volume}
+      volume_type: MANAGED
+      comment: Streaming checkpoints and operational artefacts for the feature store demo.

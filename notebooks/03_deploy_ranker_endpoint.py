@@ -13,19 +13,28 @@
 # COMMAND ----------
 dbutils.library.restartPython()
 # COMMAND ----------
-dbutils.widgets.text("catalog", "serverless_lakebase_praneeth_catalog")
-CATALOG = dbutils.widgets.get("catalog")
-SCHEMA = "crunchyroll_demo"
-MODEL = f"{CATALOG}.{SCHEMA}.crunchyroll_ranker"
-ENDPOINT = "crunchyroll-watch-next-ranker"
+import os, sys
+_root = os.path.abspath(os.path.join(os.getcwd(), ".."))
+if _root not in sys.path:
+    sys.path.insert(0, _root)
+from src.crfs.config import Config
+
+cfg = Config.from_widgets(dbutils, extra_widgets={"model_version": ""})
+CATALOG, SCHEMA = cfg.catalog, cfg.schema
+MODEL = cfg.t("crunchyroll_ranker")
+ENDPOINT = cfg.ranker_endpoint
 
 import mlflow
 mlflow.set_registry_uri("databricks-uc")
 from mlflow.tracking import MlflowClient
 mc = MlflowClient()
 versions = mc.search_model_versions(f"name='{MODEL}'")
-latest = max(int(v.version) for v in versions)
-print("serving", MODEL, "version", latest)
+# model_version pins a specific version; empty means "whatever training just
+# produced". The spine runs this notebook twice -- once for v1, once after
+# request-time features produce v2 -- so it must not assume either.
+pinned = cfg.extras.get("model_version", "").strip()
+latest = int(pinned) if pinned else max(int(v.version) for v in versions)
+print("serving", MODEL, "version", latest, "(pinned)" if pinned else "(latest)")
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import (
@@ -33,7 +42,7 @@ from databricks.sdk.service.serving import (
 )
 w = WorkspaceClient()
 
-cfg = EndpointCoreConfigInput(
+ep_cfg = EndpointCoreConfigInput(
     name=ENDPOINT,
     served_entities=[ServedEntityInput(
         entity_name=MODEL,
@@ -59,11 +68,11 @@ def with_conflict_retry(fn, what):
 existing = [e for e in w.serving_endpoints.list() if e.name == ENDPOINT]
 if not existing:
     print("creating endpoint", ENDPOINT)
-    with_conflict_retry(lambda: w.serving_endpoints.create(name=ENDPOINT, config=cfg), "create")
+    with_conflict_retry(lambda: w.serving_endpoints.create(name=ENDPOINT, config=ep_cfg), "create")
 else:
     print("updating endpoint", ENDPOINT)
     with_conflict_retry(lambda: w.serving_endpoints.update_config(
-        name=ENDPOINT, served_entities=cfg.served_entities), "update")
+        name=ENDPOINT, served_entities=ep_cfg.served_entities), "update")
 
 # COMMAND ----------
 import time, json

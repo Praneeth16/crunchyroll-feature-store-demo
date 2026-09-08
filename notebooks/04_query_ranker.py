@@ -10,15 +10,21 @@
 # MAGIC This notebook also measures keyed-read latency against the online store
 # MAGIC and reads back the inference table the endpoint captured.
 # COMMAND ----------
-# MAGIC %pip install databricks-sdk --quiet
+# MAGIC %pip install databricks-sdk "psycopg[binary]" --quiet
 # COMMAND ----------
 dbutils.library.restartPython()
 # COMMAND ----------
-dbutils.widgets.text("catalog", "serverless_lakebase_praneeth_catalog")
-CATALOG = dbutils.widgets.get("catalog")
-SCHEMA = "crunchyroll_demo"
-ENDPOINT = "crunchyroll-watch-next-ranker"
-spark.sql(f"USE {CATALOG}.{SCHEMA}")
+import os, sys
+_root = os.path.abspath(os.path.join(os.getcwd(), ".."))
+if _root not in sys.path:
+    sys.path.insert(0, _root)
+from src.crfs.config import Config
+from src.crfs import candidates as C
+
+cfg = Config.from_widgets(dbutils)
+CATALOG, SCHEMA = cfg.catalog, cfg.schema
+ENDPOINT = cfg.ranker_endpoint
+spark.sql(f"USE {cfg.fq}")
 
 import time, json
 import pandas as pd
@@ -43,9 +49,13 @@ candidates = spark.sql(f"""
 """).toPandas()
 print("eligible candidates:", len(candidates))
 
-records = [{"viewer_id": VID, "title_id": r.title_id, "surface": "post_play",
-            "device": "tv", "locale": "en-US", "hour_of_day": 21}
-           for r in candidates.itertuples()]
+# Built by src/crfs/candidates.py so this notebook, notebook 05 and the app all send
+# the identical payload. request_epoch_s matters: without it the v2 ranker's
+# cr_session_decay UDF receives None, guards to 0.0, and the feature is silently dead.
+REQUEST_EPOCH = int(time.time())
+records = C.request_records(VID, candidates["title_id"], surface="post_play",
+                            device="tv", locale="en-US", hour_of_day=21,
+                            request_epoch_s=REQUEST_EPOCH)
 
 t0 = time.time()
 resp = w.serving_endpoints.query(name=ENDPOINT, dataframe_records=records)
@@ -61,18 +71,40 @@ display(ranked[["title_name", "primary_genre", "play_start_probability"]].head(1
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## Keyed-read latency against the Lakebase online store
+# MAGIC
+# MAGIC Measured the way an application reads: one Postgres connection, one keyed
+# MAGIC `SELECT ... WHERE viewer_id = %s` per call.
+# MAGIC
+# MAGIC The first version of this notebook timed `spark.sql()` against the FOREIGN
+# MAGIC table instead and reported ~1 s as "online keyed read latency". That number
+# MAGIC was serverless SQL planning plus a federated read — it never touched the
+# MAGIC serving path. Both numbers are printed below, clearly labelled, because the
+# MAGIC gap between them is itself worth explaining.
 # COMMAND ----------
+from src.crfs import online
+
 viewer_ids = [r.viewer_id for r in spark.sql(
-    f"SELECT viewer_id FROM {CATALOG}.{SCHEMA}.viewers ORDER BY rand() LIMIT 30").collect()]
-lat = []
-for vid in viewer_ids:
+    f"SELECT viewer_id FROM {cfg.t('viewers')} ORDER BY rand() LIMIT 30").collect()]
+
+store = online.from_config(w, cfg)
+keyed = store.keyed_read_latency("online_viewer_features", "viewer_id", viewer_ids)
+print("Lakebase keyed reads via Postgres, from the notebook driver (in-region):")
+print("   ", keyed)
+
+row, cols, one_ms = store.keyed_read("online_viewer_features", "viewer_id", viewer_ids[0])
+print(f"\nexample row ({one_ms:.1f} ms):")
+print("   ", dict(list(zip(cols, row))[:6]) if row else None)
+
+sql_lat = []
+for vid in viewer_ids[:5]:
     t0 = time.time()
-    spark.sql(f"SELECT * FROM {CATALOG}.{SCHEMA}.online_viewer_features WHERE viewer_id = '{vid}'").collect()
-    lat.append((time.time() - t0) * 1000)
-lat = sorted(lat)
-p50 = lat[len(lat) // 2]
-p95 = lat[int(len(lat) * 0.95)]
-print(f"online keyed reads (n={len(lat)}): p50={p50:.0f} ms, p95={p95:.0f} ms, min={lat[0]:.0f} ms")
+    spark.sql(f"SELECT * FROM {cfg.t('online_viewer_features')} WHERE viewer_id = '{vid}'").collect()
+    sql_lat.append((time.time() - t0) * 1000)
+sql_p50 = sorted(sql_lat)[len(sql_lat) // 2]
+print(f"\nSame rows via spark.sql on the FOREIGN table: p50={sql_p50:.0f} ms")
+print("    ^ SQL planning + federated read. Not the serving path. Do not quote this")
+print("      as online-store latency.")
+store.close()
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## What the endpoint saw and decided — inference table
@@ -87,8 +119,12 @@ if payload_tbl:
     print("payload table:", payload_tbl, "| columns:", captured.columns, "| rows:", captured.count())
 
 dbutils.notebook.exit(json.dumps({
+    "endpoint": ENDPOINT,
+    "request_epoch_s": REQUEST_EPOCH,
     "endpoint_query_ms": round(query_ms),
-    "online_read_p50_ms": round(p50), "online_read_p95_ms": round(p95),
+    "candidates_scored": len(records),
+    "keyed_read_postgres": keyed,
+    "sql_foreign_table_p50_ms": round(sql_p50),
     "top_pick": str(ranked.iloc[0]["title_name"]),
     "top_score": round(float(ranked.iloc[0]["play_start_probability"]), 4),
 }))

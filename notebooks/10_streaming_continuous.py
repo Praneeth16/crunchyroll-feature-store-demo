@@ -25,11 +25,12 @@
 # COMMAND ----------
 # MAGIC %pip install databricks-sdk --quiet
 # COMMAND ----------
-# MAGIC %pip install databricks-feature-engineering --quiet
+# MAGIC %pip install databricks-feature-engineering "psycopg[binary]" --quiet
 # COMMAND ----------
 dbutils.library.restartPython()
 # COMMAND ----------
 import os, sys, time, json
+from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 
@@ -43,8 +44,7 @@ from databricks.sdk import WorkspaceClient
 from databricks.feature_engineering import FeatureEngineeringClient
 
 cfg = Config.from_widgets(dbutils, extra_widgets={
-    "keep_running": "false"
-})
+    "keep_running": "false", "reset_checkpoint": "false", "n_cycles": "8"})
 
 w = WorkspaceClient()
 fe = FeatureEngineeringClient()
@@ -58,57 +58,65 @@ print(cfg.describe())
 # MAGIC %md
 # MAGIC ## Setup: create volumes and feature table infrastructure
 
-# Ensure the volume exists
+# COMMAND ----------
+# The checkpoint volume is declared in the bundle (resources/storage.yml), so it
+# already exists. Verify rather than create: w.volumes.get_by_name does not exist in
+# this SDK and w.volumes.create() requires volume_type, so the previous attempt threw
+# AttributeError then TypeError.
+VOLUME_FQ = f"{cfg.catalog}.{cfg.schema}.{cfg.volume}"
 try:
-    w.volumes.get_by_name(cfg.catalog, cfg.schema, cfg.volume)
-    print(f"✓ Volume {cfg.volume} exists")
+    spark.sql(f"DESCRIBE VOLUME {VOLUME_FQ}")
+    print(f"volume {VOLUME_FQ} present")
 except Exception:
-    w.volumes.create(
-        name=cfg.volume,
-        catalog_name=cfg.catalog,
-        schema_name=cfg.schema
-    )
-    print(f"✓ Created volume {cfg.volume}")
+    print(f"volume {VOLUME_FQ} missing - creating it")
+    spark.sql(f"CREATE VOLUME IF NOT EXISTS {VOLUME_FQ}")
 
-# Create the checkpoint directory location if needed
-spark.sql(f"""
-CREATE DIRECTORY IF NOT EXISTS '{cfg.checkpoint("session_features")}'
-""")
+CHECKPOINT = cfg.checkpoint("session_features")
+print("checkpoint:", CHECKPOINT)
 
-# Create session_features_current table if missing (feature table, PK=viewer_id, CDF=true)
-try:
-    spark.sql(f"DESCRIBE TABLE {cfg.t('session_features_current')}")
-    print(f"✓ Feature table {cfg.t('session_features_current')} exists")
-except Exception:
-    print(f"Creating feature table {cfg.t('session_features_current')}...")
-    spark.sql(f"""
-    CREATE TABLE {cfg.t('session_features_current')} (
-        viewer_id STRING NOT NULL,
-        session_seconds DOUBLE,
-        session_skips INT,
-        session_events INT,
-        last_event_epoch_s LONG,
-        src_event_epoch_ms LONG
-    )
-    USING DELTA
-    TBLPROPERTIES (
-        'primary_key' = 'viewer_id',
-        'delta.enableChangeDataFeed' = 'true'
-    )
-    """)
-    print(f"✓ Created feature table {cfg.t('session_features_current')}")
+# The session feature table must be created through the Feature Engineering client.
+# A plain CREATE TABLE with TBLPROPERTIES ('primary_key' = ...) is NOT a feature
+# table -- the property is inert, fe.write_table has nothing to merge on, and
+# publish_table cannot attach an online table to it.
+from databricks.feature_engineering import FeatureEngineeringClient
+
+fe = FeatureEngineeringClient()
+SESSION = cfg.t("session_features_current")
+
+if spark.catalog.tableExists(SESSION):
+    print(f"feature table {SESSION} exists")
+else:
+    empty = spark.createDataFrame(
+        [], "viewer_id STRING, session_seconds DOUBLE, session_skips INT, "
+            "session_events INT, last_event_epoch_s LONG, src_event_epoch_ms LONG")
+    fe.create_table(
+        name=SESSION,
+        primary_keys=["viewer_id"],
+        df=empty,
+        description="Live per-viewer session features, maintained by a streaming "
+                    "aggregate and synced to Lakebase with publish_mode=CONTINUOUS")
+    # CDF is the contract CONTINUOUS publish reads from.
+    spark.sql(f"ALTER TABLE {SESSION} SET TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')")
+    print(f"created feature table {SESSION}")
 
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## Start the Structured Streaming pipeline
 
+# COMMAND ----------
 print(f"\n[{time.strftime('%H:%M:%S')}] Starting Structured Streaming pipeline...")
 print(f"  Source: {cfg.t('engagement_events_stream')}")
 print(f"  Sink: {cfg.t('session_features_current')} (merge)")
 print(f"  Checkpoint: {cfg.checkpoint('session_features')}")
 
-# Ensure we start fresh for this demo
-spark.sql(f"DELETE FROM {cfg.checkpoint('session_features')}")
+# Optionally start from a clean checkpoint. Deleting a checkpoint replays the
+# source from the beginning, so it is opt-in rather than the default.
+if cfg.extras.get("reset_checkpoint", "false").lower() == "true":
+    try:
+        dbutils.fs.rm(CHECKPOINT, recurse=True)
+        print("cleared checkpoint", CHECKPOINT)
+    except Exception as e:
+        print("no checkpoint to clear:", str(e)[:120])
 
 from pyspark.sql import functions as F
 
@@ -119,36 +127,91 @@ stream_df = spark.readStream.table(cfg.t("engagement_events_stream"))
 agg_df = features.session_aggregate(stream_df, watermark="10 minutes")
 
 # Define the merge write logic
-def merge_write(bdf, _):
-    """Merge batch into the feature table using fe.write_table."""
-    fe.write_table(
-        name=cfg.t("session_features_current"),
-        df=bdf,
-        mode="merge"
-    )
+SESSION_TABLE = SESSION  # plain string; cfg is not serializable into foreachBatch
 
-# Create the stream with foreachBatch
-query = (agg_df
-    .writeStream
-    .foreachBatch(merge_write)
-    .option("checkpointLocation", cfg.checkpoint("session_features"))
-    .trigger(processingTime="5 seconds")
-    .start())
 
-print(f"✓ Stream started, query ID: {query.id}")
+def merge_write(batch_df, batch_id):
+    """Upsert one micro-batch into the session feature table.
+
+    This runs in a SEPARATE Python process that has no Databricks credentials, so it
+    cannot build an SDK-backed client. `FeatureEngineeringClient()` here dies with
+
+      ValueError: default auth: cannot configure default credentials
+
+    inside the foreachBatch worker. fe.write_table is therefore unavailable, and the
+    upsert is a plain Delta MERGE via the batch's own session. That is the same
+    operation fe.write_table(mode="merge") performs; the table stays a registered
+    feature table with Change Data Feed on, so the CONTINUOUS publish keeps syncing it
+    to Lakebase exactly as before.
+    """
+    if batch_df.isEmpty():
+        return
+    # DeltaTable's merge builder, not a temp view + SQL: serverless rejects
+    #   [NOT_SUPPORTED_WITH_SERVERLESS] GLOBAL TEMPORARY VIEW is not supported
+    # and a session-local view is awkward across the cloned foreachBatch session.
+    from delta.tables import DeltaTable
+
+    (DeltaTable.forName(batch_df.sparkSession, SESSION_TABLE)
+        .alias("t")
+        .merge(batch_df.alias("s"), "t.viewer_id = s.viewer_id")
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute())
+    print(f"  batch {batch_id}: merged {batch_df.count()} viewer row(s)")
+
+
+# Serverless notebook compute rejects an infinite trigger:
+#   INFINITE_STREAMING_TRIGGER_NOT_SUPPORTED: Trigger type ProcessingTime is not
+#   supported for this cluster type. Use a different trigger type e.g. AvailableNow, Once.
+# So the aggregation runs as repeated availableNow micro-batches instead of one
+# always-on query. Say this out loud in the demo -- it is a real platform constraint,
+# not a shortcut:
+#
+#   * events -> Delta                : Zerobus, continuous
+#   * Delta  -> session features      : availableNow micro-batches here; an always-on
+#                                      query needs classic compute or a Lakeflow pipeline
+#   * features -> Lakebase           : publish_mode="CONTINUOUS", a streaming pipeline
+#                                      the platform runs for us, genuinely always-on
+#
+# The Lakebase leg -- the one this demo is about -- is continuous either way.
+def drain_once(label: str = ""):
+    """Process everything currently in the source, then stop."""
+    q = (agg_df
+         .writeStream
+         # groupBy("viewer_id") with no time window is a non-windowed aggregation, so
+         # append is rejected:
+         #   STREAMING_OUTPUT_MODE.UNSUPPORTED_OPERATION: Invalid streaming output mode:
+         #   append. This output mode is not supported for streaming aggregations
+         #   without watermark on streaming DataFrames/DataSets.
+         # update emits only the rows that changed in the batch, which is exactly what
+         # a merge into the feature table wants.
+         .outputMode("update")
+         .foreachBatch(merge_write)
+         .option("checkpointLocation", CHECKPOINT)
+         .trigger(availableNow=True)
+         .start())
+    q.awaitTermination()
+    if label:
+        print(f"  drained ({label})")
+    return q
+
+
+query = drain_once("initial")
+print("initial aggregation complete")
 
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## Wait for the stream to process a few batches
 
-time.sleep(3)
-print(f"\n[{time.strftime('%H:%M:%S')}] Stream is processing...")
-print(f"Status: {query.status}")
+# COMMAND ----------
+print(f"\n[{time.strftime('%H:%M:%S')}] session features after the initial drain:")
+print(f"  {spark.table(SESSION).count()} viewer row(s)")
 
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## Publish to Lakebase with CONTINUOUS mode (one-time)
 
+# COMMAND ----------
 print(f"\n[{time.strftime('%H:%M:%S')}] Publishing to Lakebase (CONTINUOUS mode)...")
 
 # First, check if already published (if so, skip)
@@ -171,6 +234,7 @@ except Exception:
 # MAGIC %md
 # MAGIC ## Wait for initial sync to complete
 
+# COMMAND ----------
 print(f"\nWaiting for initial sync...")
 try:
     ops.wait_for_sync(w, cfg.t("online_session_features"), timeout_s=120, poll_s=2)
@@ -182,6 +246,7 @@ except TimeoutError as e:
 # MAGIC %md
 # MAGIC ## Emit N burst events and measure freshness
 
+# COMMAND ----------
 n_events = 20
 print(f"\n[{time.strftime('%H:%M:%S')}] Emitting {n_events} burst events to measure freshness...")
 
@@ -193,7 +258,6 @@ title_ids = spark.sql(f"""
     ORDER BY intrinsic_popularity DESC LIMIT {n_events}
 """).toPandas()["title_id"].tolist()
 
-from datetime import datetime, timedelta
 now = datetime.now()
 burst_events = []
 for i, tid in enumerate(title_ids):
@@ -215,46 +279,63 @@ df = spark.createDataFrame(pd.DataFrame(burst_events))
 df.write.mode("append").insertInto(cfg.t("engagement_events_stream"))
 print(f"✓ Emitted {n_events} events for {viewer_id}")
 
-# Record the produced_epoch_ms values for latency measurement
-produced_timestamps = [e["produced_epoch_ms"] for e in burst_events]
-
 # COMMAND ----------
 # MAGIC %md
-# MAGIC ## Measure freshness: keyed reads from the online store
+# MAGIC ## Measure freshness, one cycle at a time
+# MAGIC
+# MAGIC Each cycle is one honest end-to-end measurement: emit an event carrying its own
+# MAGIC `produced_epoch_ms`, drain the aggregation, then poll the Lakebase row until that
+# MAGIC value appears. Subtracting two readings of the producer's clock removes any
+# MAGIC clock-skew argument, and the poll interval is reported because it quantises the
+# MAGIC answer.
+# MAGIC
+# MAGIC The number therefore includes the `availableNow` drain, which on serverless
+# MAGIC notebook compute stands in for an always-on query. Read it as "event to online
+# MAGIC value in this configuration", not as the platform's floor.
 
-print(f"\n[{time.strftime('%H:%M:%S')}] Measuring freshness with keyed reads...")
-
+# COMMAND ----------
 store = online.from_config(w, cfg)
 
-# Collect latencies for all emitted events using wait_for_value
-latencies = []
-results = []
+N_CYCLES = int(cfg.extras.get("n_cycles", "8"))
+latencies, results = [], []
 
-for i, produced_ms in enumerate(produced_timestamps):
+for i in range(N_CYCLES):
+    produced_ms = int(time.time() * 1000)
+    one = [{
+        "event_id": f"cycle-{produced_ms}-{i}",
+        "viewer_id": viewer_id,
+        "title_id": burst_events[i % len(burst_events)]["title_id"],
+        "event_ts": datetime.now(),
+        "event_type": "complete",
+        "watch_seconds": 1400.0 + i,
+        "surface": "post_play",
+        "device": "tv",
+        "locale": "en-US",
+        "produced_epoch_ms": produced_ms,
+    }]
+    (spark.createDataFrame(one)
+          .write.mode("append").saveAsTable(cfg.t("engagement_events_stream")))
+
+    drain_once()
+
     result = store.wait_for_value(
         table="online_session_features",
         key_col="viewer_id",
         key_val=viewer_id,
         watch_col="src_event_epoch_ms",
         at_least=produced_ms,
-        timeout_s=120.0,
+        timeout_s=180.0,
         poll_s=0.25,
-        verbose=False
+        verbose=False,
     )
-
     if result.get("reached"):
-        latency_ms = result["latency_ms"]
-        latencies.append(latency_ms)
-        results.append({
-            "event": i,
-            "produced_ms": produced_ms,
-            "observed_ms": result["observed"],
-            "latency_ms": latency_ms,
-            "polls": result["polls"]
-        })
-        print(f"  [{i:2d}] {latency_ms:.1f}ms (after {result['polls']} polls of {result['poll_interval_ms']:.0f}ms)")
+        latencies.append(result["latency_ms"])
+        results.append({"cycle": i, "produced_ms": produced_ms,
+                        "latency_ms": result["latency_ms"], "polls": result["polls"]})
+        print(f"  [{i:2d}] {result['latency_ms']:.0f} ms "
+              f"({result['polls']} polls of {result['poll_interval_ms']:.0f} ms)")
     else:
-        print(f"  [{i:2d}] ✗ timeout after {result['elapsed_s']}s ({result['polls']} polls)")
+        print(f"  [{i:2d}] timeout after {result['elapsed_s']}s ({result['polls']} polls)")
 
 if latencies:
     latencies_sorted = sorted(latencies)
@@ -276,6 +357,7 @@ else:
 # MAGIC %md
 # MAGIC ## Show the sync state from the platform
 
+# COMMAND ----------
 print(f"\n=== PLATFORM SYNC STATE ===")
 sync_state = ops.sync_summary(w, cfg.t("online_session_features"))
 print(json.dumps(sync_state, indent=2, default=str))
@@ -284,6 +366,7 @@ print(json.dumps(sync_state, indent=2, default=str))
 # MAGIC %md
 # MAGIC ## Measure keyed-read latency from Postgres (the serving path)
 
+# COMMAND ----------
 print(f"\n=== POSTGRES KEYED-READ LATENCY ===")
 print(f"Measuring latency from notebook driver (same region)...")
 
@@ -308,6 +391,7 @@ else:
 # MAGIC %md
 # MAGIC ## Compare: Spark SQL read (the wrong measurement)
 
+# COMMAND ----------
 print(f"\n=== SPARK SQL READ (NOT THE SERVING PATH) ===")
 print(f"For reference: what notebook 04 used to report as 'online latency'...")
 
@@ -327,6 +411,7 @@ print(f"The keyed-read latency (Postgres) is what matters for serving.")
 # MAGIC %md
 # MAGIC ## Stop the stream (do NOT leave it running and billing)
 
+# COMMAND ----------
 keep_running = cfg.extras.get("keep_running", "false").lower() == "true"
 
 if keep_running:
@@ -342,6 +427,7 @@ else:
 # MAGIC %md
 # MAGIC ## Exit with results
 
+# COMMAND ----------
 result = {
     "online_table": cfg.t("online_session_features"),
     "source_table": cfg.t("session_features_current"),
