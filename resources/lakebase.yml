@@ -1,0 +1,29 @@
+# Lakebase compute sizing -- OPT IN ONLY.
+#
+# Read this before enabling it.
+#
+# fe.create_online_store() creates and owns a Lakebase *project*. Declaring
+# `postgres_projects` here would fight that ownership: the bundle and the feature
+# store service each set fields the other does not know about, producing a
+# permanent diff that every `deploy` re-applies, and `bundle destroy` could
+# delete the online store out from under the published tables and the model's
+# feature spec. So the project is deliberately absent.
+#
+# The endpoint is a softer case: adopting it with `replace_existing` lets the
+# bundle hold the CU bounds. But note what was measured on 2026-09-07 -- changing
+# the online store's capacity class from CU_2 to CU_1 moved the endpoint bounds
+# from 8-16 CU to 4-8 CU by itself. The capacity class governs the floor, so
+# managing the endpoint here can only fight it.
+#
+# The lower-risk path, and the one scripts/preflight.sh --resize uses:
+#   databricks postgres update-endpoint \
+#     projects/<project>/branches/<branch>/endpoints/<endpoint> \
+#     --json '{"autoscaling_limit_min_cu": 4, "autoscaling_limit_max_cu": 8}'
+#
+# Enable this file by setting manage_lakebase_sizing per target, and accept that
+# the bundle now co-owns a feature-store resource.
+targets:
+  dev:
+    resources: {}
+  prod:
+    resources: {}

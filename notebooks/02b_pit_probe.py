@@ -1,9 +1,14 @@
 # Databricks notebook source
 # PIT probe: for 5 real impressions, compare viewer features at impression time (viewer_features_ts) vs today (viewer_features_current)
-dbutils.widgets.text("catalog", "serverless_lakebase_praneeth_catalog")
-CATALOG = dbutils.widgets.get("catalog")
-SCHEMA = "crunchyroll_demo"
-spark.sql(f"USE {CATALOG}.{SCHEMA}")
+import os, sys
+_root = os.path.abspath(os.path.join(os.getcwd(), ".."))
+if _root not in sys.path:
+    sys.path.insert(0, _root)
+from src.crfs.config import Config
+
+cfg = Config.from_widgets(dbutils)
+CATALOG, SCHEMA = cfg.catalog, cfg.schema
+spark.sql(f"USE {cfg.fq}")
 import json
 
 rows = spark.sql(f"""

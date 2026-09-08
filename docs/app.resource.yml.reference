@@ -1,0 +1,72 @@
+# The watch-next simulator.
+#
+# The `resources` block is how the app's service principal gets permission to
+# query endpoints and connect to Lakebase. The `postgres` resource also
+# auto-creates the SP's Postgres role -- but NOT its grants on the
+# crunchyroll_demo schema, which is owned by whoever published the online tables.
+# Run scripts/grant_app_postgres.sh after deploy, and again after any new
+# publish_table, or the app falls back to reading through the feature endpoint.
+#
+# Only the ranker is declared here. App creation FAILS OUTRIGHT if it references
+# an endpoint that does not exist yet --
+#   Error: cannot create resources.apps.crfs_watch_next:
+#   Endpoint with name 'crunchyroll-candidate-retriever' does not exist (404)
+# -- and the retriever, feature-serving and agent endpoints are created by
+# notebooks 08, 07 and 12. Making the app un-deployable until the whole pipeline
+# has run would break `bundle deploy` on a fresh workspace, so those three are
+# granted after the fact by scripts/grant_app_endpoints.sh, which `make deploy`
+# runs. The ranker is declared because it already exists on any workspace where
+# this demo has been run once.
+resources:
+  apps:
+    crfs_watch_next:
+      name: ${var.app_name}
+      description: >-
+        Crunchyroll watch-next simulator: retrieval, entitlement filter and
+        ranking against the Lakebase Online Feature Store, with the raw online
+        feature rows and a measured freshness loop on screen.
+      source_code_path: ../app
+
+      resources:
+        - name: ranker
+          serving_endpoint:
+            name: ${var.ranker_endpoint}
+            permission: CAN_QUERY
+        - name: warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+        - name: postgres
+          postgres:
+            branch: projects/${var.lakebase_project}/branches/${var.lakebase_branch}
+            database: ${var.lakebase_db_resource}
+            permission: CAN_CONNECT_AND_CREATE
+        - name: burst_job
+          job:
+            id: ${resources.jobs.crfs_event_burst.id}
+            permission: CAN_MANAGE_RUN
+
+      config:
+        env:
+          - name: DATABRICKS_CATALOG
+            value: ${var.catalog}
+          - name: DATABRICKS_SCHEMA
+            value: ${var.schema}
+          - name: RANKER_ENDPOINT
+            value: ${var.ranker_endpoint}
+          - name: RETRIEVER_ENDPOINT
+            value: ${var.retriever_endpoint}
+          - name: FEATURE_ENDPOINT
+            value: ${var.feature_endpoint}
+          - name: AGENT_ENDPOINT
+            value: ${var.agent_endpoint}
+          - name: ONLINE_STORE
+            value: ${var.online_store}
+          - name: LAKEBASE_PROJECT
+            value: ${var.lakebase_project}
+          - name: LAKEBASE_BRANCH
+            value: ${var.lakebase_branch}
+          - name: LAKEBASE_ENDPOINT
+            value: ${var.lakebase_endpoint}
+          - name: BURST_JOB_ID
+            value: ${resources.jobs.crfs_event_burst.id}

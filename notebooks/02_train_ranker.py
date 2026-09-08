@@ -18,13 +18,18 @@
 # COMMAND ----------
 dbutils.library.restartPython()
 # COMMAND ----------
-dbutils.widgets.text("catalog", "serverless_lakebase_praneeth_catalog")
-CATALOG = dbutils.widgets.get("catalog")
-SCHEMA = "crunchyroll_demo"
-MODEL = f"{CATALOG}.{SCHEMA}.crunchyroll_ranker"
+import os, sys
+_root = os.path.abspath(os.path.join(os.getcwd(), ".."))
+if _root not in sys.path:
+    sys.path.insert(0, _root)
+from src.crfs.config import Config
+
+cfg = Config.from_widgets(dbutils)
+CATALOG, SCHEMA = cfg.catalog, cfg.schema
+MODEL = cfg.t("crunchyroll_ranker")
 EXPERIMENT = f"/Users/{spark.sql('SELECT current_user()').first()[0]}/crunchyroll_ranker_experiment"
 
-spark.sql(f"USE {CATALOG}.{SCHEMA}")
+spark.sql(f"USE {cfg.fq}")
 
 import mlflow
 mlflow.set_registry_uri("databricks-uc")

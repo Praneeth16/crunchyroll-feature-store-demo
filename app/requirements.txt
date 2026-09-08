@@ -1,0 +1,5 @@
+streamlit==1.40.0
+databricks-sdk==0.31.1
+psycopg[binary]==3.2.1
+pandas==2.2.3
+pyarrow==17.0.0

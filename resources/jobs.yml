@@ -1,0 +1,230 @@
+# One spine job plus satellites.
+#
+# The spine is one multi-task job on purpose: a single run page is the artifact
+# you show a customer ("this graph is the demo"), and task values carry the model
+# version from training to deployment. Anything long-running, ad hoc, or allowed
+# to fail lives in its own job so it can never mark the spine red.
+#
+# Every task is a serverless notebook task -- no cluster configuration anywhere.
+
+# Anchors keep the parameter block in one place. Notebooks declare these as
+# widgets with their own defaults, so each one still runs standalone from the UI.
+_common: &common_params
+  catalog: ${var.catalog}
+  schema: ${var.schema}
+  online_store: ${var.online_store}
+  online_capacity: ${var.online_capacity}
+  lakebase_project: ${var.lakebase_project}
+  lakebase_branch: ${var.lakebase_branch}
+  lakebase_endpoint: ${var.lakebase_endpoint}
+  ranker_endpoint: ${var.ranker_endpoint}
+  retriever_endpoint: ${var.retriever_endpoint}
+  feature_endpoint: ${var.feature_endpoint}
+  agent_endpoint: ${var.agent_endpoint}
+  llm_endpoint: ${var.llm_endpoint}
+  warehouse_id: ${var.warehouse_id}
+  volume: ${var.volume}
+  end_date: ${var.end_date}
+
+resources:
+  jobs:
+    crfs_end_to_end:
+      name: crfs_end_to_end
+      description: >-
+        Crunchyroll Feature Store on Lakebase, start to finish: raw signals,
+        governed features, online store, point-in-time training, serving with
+        automatic feature lookup, request-time features, feature serving,
+        retrieval, freshness, ops.
+      max_concurrent_runs: 1
+      queue:
+        enabled: true
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
+      tags:
+        demo: crunchyroll-feature-store
+        layer: spine
+
+      tasks:
+        - task_key: generate_data
+          notebook_task:
+            notebook_path: ../notebooks/00_data_generation.py
+            base_parameters: *common_params
+          timeout_seconds: 2400
+
+        - task_key: build_features
+          depends_on: [{task_key: generate_data}]
+          notebook_task:
+            notebook_path: ../notebooks/01_feature_engineering.py
+            base_parameters: *common_params
+          timeout_seconds: 3600
+
+        # Leaf: the point-in-time proof, nothing depends on it.
+        - task_key: pit_probe
+          depends_on: [{task_key: build_features}]
+          notebook_task:
+            notebook_path: ../notebooks/02b_pit_probe.py
+            base_parameters: *common_params
+          timeout_seconds: 900
+
+        - task_key: train_ranker
+          depends_on: [{task_key: build_features}]
+          notebook_task:
+            notebook_path: ../notebooks/02_train_ranker.py
+            base_parameters: *common_params
+          timeout_seconds: 2400
+
+        # Runs in parallel with the ranker branch: a second model on the same
+        # online store, publishing its own viewer-embedding feature table.
+        - task_key: train_retriever
+          depends_on: [{task_key: build_features}]
+          notebook_task:
+            notebook_path: ../notebooks/08_retrieval_ranker.py
+            base_parameters: *common_params
+          timeout_seconds: 3600
+
+        - task_key: deploy_ranker
+          depends_on: [{task_key: train_ranker}]
+          notebook_task:
+            notebook_path: ../notebooks/03_deploy_ranker_endpoint.py
+            base_parameters: *common_params
+          timeout_seconds: 3600
+
+        - task_key: smoke_query
+          depends_on: [{task_key: deploy_ranker}]
+          notebook_task:
+            notebook_path: ../notebooks/04_query_ranker.py
+            base_parameters: *common_params
+          timeout_seconds: 1800
+
+        # Request-time features change the model signature, so this retrains to v2.
+        - task_key: ondemand_features
+          depends_on: [{task_key: smoke_query}]
+          notebook_task:
+            notebook_path: ../notebooks/06_ondemand_features.py
+            base_parameters: *common_params
+          timeout_seconds: 2400
+
+        - task_key: deploy_ranker_v2
+          depends_on: [{task_key: ondemand_features}]
+          notebook_task:
+            notebook_path: ../notebooks/03_deploy_ranker_endpoint.py
+            base_parameters: *common_params
+          timeout_seconds: 3600
+
+        # The feature spec needs the UDFs that ondemand_features created.
+        - task_key: feature_serving
+          depends_on: [{task_key: ondemand_features}]
+          notebook_task:
+            notebook_path: ../notebooks/07_feature_serving.py
+            base_parameters: *common_params
+          timeout_seconds: 3600
+
+        - task_key: freshness_triggered
+          depends_on: [{task_key: deploy_ranker_v2}]
+          notebook_task:
+            notebook_path: ../notebooks/05_freshness_triggered.py
+            base_parameters: *common_params
+          timeout_seconds: 2400
+
+        - task_key: ops_report
+          depends_on:
+            - {task_key: freshness_triggered}
+            - {task_key: feature_serving}
+            - {task_key: train_retriever}
+          notebook_task:
+            notebook_path: ../notebooks/13_ops_and_cost.py
+            base_parameters: *common_params
+          timeout_seconds: 1800
+
+    # ---------------------------------------------------------------- satellites
+    crfs_streaming:
+      name: crfs_streaming
+      description: >-
+        Continuous freshness: a producer feeds engagement_events_stream while a
+        streaming aggregate maintains session features and CONTINUOUS publish
+        keeps Lakebase within seconds of each micro-batch.
+      max_concurrent_runs: 1
+      tags:
+        demo: crunchyroll-feature-store
+        layer: streaming
+      # The Zerobus SDK cannot pip-install at runtime on serverless, so it is
+      # declared as a task environment dependency instead.
+      environments:
+        - environment_key: zerobus
+          spec:
+            client: "3"
+            dependencies:
+              - databricks-zerobus-ingest-sdk
+      tasks:
+        - task_key: streaming_aggregate
+          notebook_task:
+            notebook_path: ../notebooks/10_streaming_continuous.py
+            base_parameters: *common_params
+          timeout_seconds: 5400
+        - task_key: produce_events
+          environment_key: zerobus
+          notebook_task:
+            notebook_path: ../notebooks/11_event_producer.py
+            base_parameters:
+              <<: *common_params
+              mode: loop
+              duration_minutes: "10"
+              events_per_second: "2"
+          timeout_seconds: 3600
+
+    # The app's "watch 3 episodes now" button triggers this.
+    crfs_event_burst:
+      name: crfs_event_burst
+      description: Emit a small burst of completion events for one viewer, right now.
+      max_concurrent_runs: 3
+      tags:
+        demo: crunchyroll-feature-store
+        layer: streaming
+      tasks:
+        - task_key: burst
+          notebook_task:
+            notebook_path: ../notebooks/11_event_producer.py
+            base_parameters:
+              <<: *common_params
+              mode: burst
+              n_events: "3"
+              viewer_id: v0001
+          timeout_seconds: 600
+
+    crfs_agent:
+      name: crfs_agent
+      description: >-
+        Log and deploy the explainer agent, whose tool reads the same Lakebase
+        features through the Feature Serving endpoint.
+      max_concurrent_runs: 1
+      tags:
+        demo: crunchyroll-feature-store
+        layer: ml
+      tasks:
+        - task_key: agent
+          notebook_task:
+            notebook_path: ../notebooks/12_agent_explain.py
+            base_parameters:
+              <<: *common_params
+              auth_mode: resource
+          timeout_seconds: 3600
+
+    crfs_teardown:
+      name: crfs_teardown
+      description: >-
+        Stop the money. Deletes app, endpoints, sync pipelines and the online
+        store; --cost-only stops before touching data.
+      max_concurrent_runs: 1
+      tags:
+        demo: crunchyroll-feature-store
+        layer: ops
+      tasks:
+        - task_key: teardown
+          notebook_task:
+            notebook_path: ../notebooks/99_teardown.py
+            base_parameters:
+              <<: *common_params
+              cost_only: "true"
+              keep_data: "true"
+          timeout_seconds: 2400
