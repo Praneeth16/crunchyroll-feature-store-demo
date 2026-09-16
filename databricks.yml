@@ -49,6 +49,13 @@ variables:
     default: projects/crunchyroll-online-store/branches/production/databases/db-p78x-mcrka97vph
   ranker_endpoint:
     default: crunchyroll-watch-next-ranker
+  rail_ranker_endpoint:
+    description: >-
+      Vertical (rail) ranking endpoint. Deliberately separate from
+      ranker_endpoint: this one sits in the homepage request path and is
+      configured without scale-to-zero, with explicit provisioned
+      concurrency and with route optimization.
+    default: crunchyroll-rail-ranker
   retriever_endpoint:
     default: crunchyroll-candidate-retriever
   feature_endpoint:

@@ -20,19 +20,33 @@
 set -euo pipefail
 PROFILE="${1:-fe-vm-lakebase-praneeth}"
 TARGET="${2:-dev}"
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Whatever scripts/bootstrap.sh discovered wins over the built-in defaults, which
+# are the ids of the workspace this was written on. Without this the app would be
+# handed another workspace's warehouse id and fail at first query.
+if [ -f "$HERE/.crfs.vars" ]; then
+  # shellcheck disable=SC2046
+  eval $(grep -v '^#' "$HERE/.crfs.vars" | grep -E '^(catalog|schema|warehouse_id|lakebase_project|lakebase_branch|lakebase_endpoint)=' \
+         | sed -e 's/^catalog=/CRFS_CATALOG=/' -e 's/^schema=/CRFS_SCHEMA=/' \
+               -e 's/^warehouse_id=/CRFS_WAREHOUSE=/' -e 's/^lakebase_project=/CRFS_PROJECT=/' \
+               -e 's/^lakebase_branch=/CRFS_BRANCH=/' -e 's/^lakebase_endpoint=/CRFS_LBEP=/')
+fi
+
 APP="${APP:-crfs-watch-next}"
-CATALOG="${CATALOG:-serverless_lakebase_praneeth_catalog}"
-SCHEMA="${SCHEMA:-crunchyroll_demo}"
-WAREHOUSE="${WAREHOUSE:-4d39ac2e32b72a3a}"
-PROJECT="${PROJECT:-crunchyroll-online-store}"
-BRANCH="${BRANCH:-production}"
-LB_ENDPOINT="${LB_ENDPOINT:-primary}"
+CATALOG="${CATALOG:-${CRFS_CATALOG:-serverless_lakebase_praneeth_catalog}}"
+SCHEMA="${SCHEMA:-${CRFS_SCHEMA:-crunchyroll_demo}}"
+WAREHOUSE="${WAREHOUSE:-${CRFS_WAREHOUSE:-4d39ac2e32b72a3a}}"
+PROJECT="${PROJECT:-${CRFS_PROJECT:-crunchyroll-online-store}}"
+BRANCH="${BRANCH:-${CRFS_BRANCH:-production}}"
+LB_ENDPOINT="${LB_ENDPOINT:-${CRFS_LBEP:-primary}}"
 RANKER="${RANKER:-crunchyroll-watch-next-ranker}"
+RAIL_RANKER="${RAIL_RANKER:-crunchyroll-rail-ranker}"
 RETRIEVER="${RETRIEVER:-crunchyroll-candidate-retriever}"
 FEATURES="${FEATURES:-crunchyroll-viewer-features}"
 AGENT="${AGENT:-crunchyroll-explainer-agent}"
 DB=$(command -v databricks || echo /opt/homebrew/bin/databricks)
-HERE="$(cd "$(dirname "$0")/.." && pwd)"
+echo "== target $CATALOG.$SCHEMA on warehouse $WAREHOUSE"
 
 echo "== resolving ids"
 DB_RESOURCE=$("$DB" postgres list-databases "projects/$PROJECT/branches/$BRANCH" --profile "$PROFILE" -o json \
@@ -56,7 +70,7 @@ echo "   burst job: ${BURST_JOB:-<not found; deploy the bundle first>}"
 # Only declare endpoints that exist. Declaring a missing one makes the whole
 # create/update fail with 404 RESOURCE_DOES_NOT_EXIST.
 export PROFILE
-RES_JSON=$(python3 - "$WAREHOUSE" "$PROJECT" "$BRANCH" "$DB_RESOURCE" "$BURST_JOB" "$RANKER" "$RETRIEVER" "$FEATURES" "$AGENT" <<'PYEOF'
+RES_JSON=$(python3 - "$WAREHOUSE" "$PROJECT" "$BRANCH" "$DB_RESOURCE" "$BURST_JOB" "$RANKER" "$RAIL_RANKER" "$RETRIEVER" "$FEATURES" "$AGENT" <<'PYEOF'
 import json, subprocess, sys, shutil
 wh, project, branch, db_res, burst = sys.argv[1:6]
 endpoints = sys.argv[6:]
@@ -153,9 +167,39 @@ if [ "$STATE" != "ACTIVE" ]; then
   echo "   app state: $STATE"
 fi
 
+echo "== rendering app.yaml for this workspace"
+# app.yaml carries ${NAME} placeholders. Databricks Apps does not expand them, so
+# without this step the app falls back to app.py's hardcoded defaults -- which are
+# the previous workspace's ids. Rendered into a staging copy so the repo file stays
+# a template.
+STAGE_DIR=$(mktemp -d)
+cp -R "$HERE/app/." "$STAGE_DIR/"
+python3 - "$STAGE_DIR/app.yaml" "$CATALOG" "$SCHEMA" "$RANKER" "$RAIL_RANKER" \
+         "$RETRIEVER" "$FEATURES" "$AGENT" "$PROJECT" "$BRANCH" "$LB_ENDPOINT" \
+         "${BURST_JOB:-}" "$APP" <<'PYEOF'
+import sys
+path, cat, sch, ranker, rail, retr, feats, agent, proj, branch, lbep, burst, app = sys.argv[1:14]
+subs = {
+    "DATABRICKS_CATALOG": cat, "DATABRICKS_SCHEMA": sch,
+    "RANKER_ENDPOINT": ranker, "RAIL_RANKER_ENDPOINT": rail,
+    "RETRIEVER_ENDPOINT": retr, "FEATURE_ENDPOINT": feats, "AGENT_ENDPOINT": agent,
+    "ONLINE_STORE": proj, "LAKEBASE_PROJECT": proj, "LAKEBASE_BRANCH": branch,
+    "LAKEBASE_ENDPOINT": lbep, "BURST_JOB_ID": burst,
+}
+text = open(path).read()
+for k, v in subs.items():
+    text = text.replace("${%s}" % k, v)
+open(path, "w").write(text)
+missing = [ln.strip() for ln in text.splitlines() if "${" in ln]
+if missing:
+    print("   unresolved placeholders still in app.yaml:", missing, file=sys.stderr)
+print("   app.yaml rendered")
+PYEOF
+
 echo "== syncing app source and deploying"
 WS_PATH="/Workspace/Users/$("$DB" current-user me --profile "$PROFILE" -o json | python3 -c 'import json,sys; print(json.load(sys.stdin)["userName"])')/crfs_app"
-"$DB" workspace import-dir "$HERE/app" "$WS_PATH" --overwrite --profile "$PROFILE" >/dev/null
+"$DB" workspace import-dir "$STAGE_DIR" "$WS_PATH" --overwrite --profile "$PROFILE" >/dev/null
+rm -rf "$STAGE_DIR"
 "$DB" apps deploy "$APP" --source-code-path "$WS_PATH" --profile "$PROFILE" 2>&1 | tail -4
 
 echo "== url"

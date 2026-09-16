@@ -73,7 +73,10 @@ for app in w.apps.list():
 # MAGIC %md
 # MAGIC ## 2 · Serving endpoints — agent first, it depends on the others
 # COMMAND ----------
-for ep in [cfg.agent_endpoint, cfg.feature_endpoint, cfg.retriever_endpoint, cfg.ranker_endpoint]:
+# The rail ranker is first: it is the only endpoint configured without
+# scale-to-zero, so it is the one billing continuously right now.
+for ep in [cfg.rail_ranker_endpoint, cfg.agent_endpoint, cfg.feature_endpoint,
+           cfg.retriever_endpoint, cfg.ranker_endpoint]:
     step(f"endpoint {ep}", lambda n=ep: w.serving_endpoints.delete(name=n))
 # COMMAND ----------
 # MAGIC %md
@@ -92,7 +95,9 @@ for job in w.jobs.list():
 # MAGIC ## 4 · Synced (online) tables
 # COMMAND ----------
 ONLINE = ["online_viewer_features", "online_title_features", "online_recent_behavior",
-          "online_viewer_embedding", "online_session_features"]
+          "online_viewer_embedding", "online_session_features",
+          # vertical ranking
+          "online_rail_features", "online_viewer_rail"]
 for name in ONLINE:
     step(f"synced table {name}", lambda n=name: ops.drop_synced_if_exists(w, cfg.t(n)))
 # COMMAND ----------
@@ -116,7 +121,7 @@ if COST_ONLY:
 # MAGIC ## 6 · Feature spec and the request-time UDFs
 # COMMAND ----------
 step("feature spec", lambda: fe.delete_feature_spec(name=cfg.t("crunchyroll_viewer_feature_spec")))
-for stmt in udfs.drop_ddl(cfg.fq):
+for stmt in udfs.drop_ddl(cfg.fq) + udfs.rail_drop_ddl(cfg.fq):
     step(stmt.split("EXISTS ")[-1], lambda s=stmt: spark.sql(s))
 # COMMAND ----------
 # MAGIC %md
@@ -128,16 +133,20 @@ else:
     TABLES = ["viewer_features_ts", "viewer_features_current", "title_features",
               "recent_behavior_current", "viewer_embedding_current", "session_features_current",
               "engagement_events_stream", "crfs_ops_sync_log",
+              # vertical ranking: feature tables before their sources
+              "rail_features", "viewer_rail_features_ts", "crfs_serving_benchmark",
+              "rail_impressions", "rail_position_propensity", "rail_title_map", "rails",
               "titles", "viewers", "entitlements", "engagement_events"]
     for name in TABLES:
         step(f"table {name}", lambda n=name: spark.sql(f"DROP TABLE IF EXISTS {cfg.t(n)}"))
 
     for t in spark.sql(f"SHOW TABLES IN {cfg.fq}").collect():
-        if t.tableName.startswith(("cr_ranker_inference", "event_log_")):
+        if t.tableName.startswith(("cr_ranker_inference", "cr_rail_inference", "event_log_")):
             step(f"table {t.tableName}",
                  lambda n=t.tableName: spark.sql(f"DROP TABLE IF EXISTS {cfg.t(n)}"))
 
-    for model in ["crunchyroll_ranker", "crunchyroll_retriever", "crunchyroll_explainer_agent"]:
+    for model in ["crunchyroll_ranker", "crunchyroll_rail_ranker", "crunchyroll_retriever",
+                  "crunchyroll_explainer_agent"]:
         step(f"model {model}",
              lambda m=model: w.registered_models.delete(full_name=cfg.t(m)))
 # COMMAND ----------

@@ -116,6 +116,36 @@ class OnlineStore:
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         return (rows[0] if rows else None), columns, elapsed_ms
 
+    def keyed_read_composite(self, table: str, keys: dict, cols: str = "*"):
+        """A multi-column keyed lookup -- the shape viewer x rail features need.
+
+        Column names are interpolated because psycopg cannot parameterise
+        identifiers, so they are validated against a strict identifier pattern
+        first: these come from application code, but a lookup helper that will
+        splice anything into a WHERE clause is a bad helper.
+        Returns (row_or_None, columns, elapsed_ms).
+        """
+        import re
+        ident = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+        for k in keys:
+            if not ident.fullmatch(k):
+                raise ValueError(f"not a valid column name: {k!r}")
+        # Mirrors src/crfs/online.py. `table` and `cols` were spliced unvalidated while
+        # the docstring above claimed they were checked; kept identical in both copies
+        # so the app and the pipeline cannot drift on a security-relevant guard.
+        if not ident.fullmatch(table):
+            raise ValueError(f"not a valid table name: {table!r}")
+        if cols != "*":
+            for c in cols.split(","):
+                if not ident.fullmatch(c.strip()):
+                    raise ValueError(f"not a valid column list: {cols!r}")
+        where = " AND ".join(f"{k} = %s" for k in keys)
+        sql = f'SELECT {cols} FROM "{self.pg_schema}"."{table}" WHERE {where}'
+        t0 = time.perf_counter()
+        rows, columns = self.query(sql, tuple(keys.values()))
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        return (rows[0] if rows else None), columns, elapsed_ms
+
     def keyed_read_latency(self, table: str, key_col: str, key_vals, warmup: int = 2):
         """p50/p95 over a list of keys. Warmup reads are excluded."""
         for k in list(key_vals)[:warmup]:

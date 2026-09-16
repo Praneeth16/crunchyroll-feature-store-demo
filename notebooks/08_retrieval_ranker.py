@@ -250,11 +250,23 @@ class CrunchyrollRetriever(mlflow.pyfunc.PythonModel):
             results.append(json.dumps(candidates_list))
 
         # One JSON string per input row, always -- never a bare list, and never a
-        # different type for a single row. A numpy string array is what MLflow can
-        # infer an OUTPUT schema from, which is what Unity Catalog requires; a
-        # pandas StringDtype Series is not (it silently yields inputs-only). This
-        # mirrors the ranker in notebook 02, whose float array registers cleanly.
-        return np.array(results, dtype=str)
+        # different type for a single row.
+        #
+        # Returned as a single-column pandas DataFrame, which is the shape that Unity
+        # Catalog registration actually accepts here. The previous comment claimed a
+        # numpy string array "is what MLflow can infer an OUTPUT schema from"; the
+        # measured truth is the opposite. With the errors finally surfaced into the task
+        # output, BOTH registration recipes failed identically with:
+        #
+        #   MlflowException: Model passed for registration contained a signature that
+        #   includes only inputs.
+        #
+        # i.e. MLflow could not infer an output spec from a `<U...` unicode array. The
+        # two models in this repo that register cleanly return a float array (notebook
+        # 02) and a DataFrame (notebook 22); a DataFrame gives an explicit named column,
+        # so that is what this returns.
+        import pandas as _pd
+        return _pd.DataFrame({"candidates": results})
 
 # Save artifacts
 # A writable directory the driver actually owns. /tmp is not reliably writable on
@@ -402,14 +414,76 @@ with mlflow.start_run(run_name="crunchyroll_retriever") as run:
             "title_popularity": os.path.join(ARTIFACT_DIR, "title_popularity.pkl"),
         },
     )
-    try:
-        fe.log_model(registered_model_name=cfg.t("crunchyroll_retriever"), **log_kwargs)
-        RETRIEVER_REGISTERED = True
-        print("registered to Unity Catalog")
-    except Exception as e:
-        print(f"UC registration FAILED (known, unresolved): {str(e)[:200]}")
-        print("logging to the run without registering, so the artifacts are still available")
-        fe.log_model(**log_kwargs)
+    # Two recipes, tried in order -- the same loop notebook 22 uses for the rail
+    # ranker. UC needs a signature with BOTH inputs and outputs, and fe.log_model
+    # derives the output spec by *running the model* on an example. Which recipe
+    # produces that has varied between models:
+    #
+    #   * explicit `input_example`  -- what notebook 02's ranker registers with, and
+    #     the only thing this notebook used to try;
+    #   * `infer_input_example=True` -- recorded in docs/verification_log.md as the
+    #     resolution after this retriever failed six times with "a signature that
+    #     includes only inputs", but never actually wired in here. Notebook 22 has
+    #     been carrying both since it was written; this notebook was left behind.
+    #
+    # Unlike notebook 22 this does not raise when both fail. The SVD, the published
+    # embedding table, its online mirror and the recall metrics are all independent of
+    # registration, and blocking the whole horizontal pipeline on a retriever endpoint
+    # nobody queries would be the wrong trade.
+    attempts = [("explicit input_example", dict(input_example=input_example_pd)),
+                ("infer_input_example=True", dict(infer_input_example=True))]
+    registered_with = None
+    REGISTRATION_ERRORS = {}
+    for _label, _extra in attempts:
+        try:
+            fe.log_model(registered_model_name=cfg.t("crunchyroll_retriever"),
+                         **{k: v for k, v in log_kwargs.items() if k != "input_example"},
+                         **_extra)
+            RETRIEVER_REGISTERED = True
+            registered_with = _label
+            print(f"registered to Unity Catalog with {_label}")
+            break
+        except Exception as e:
+            REGISTRATION_ERRORS[_label] = f"{type(e).__name__}: {str(e)[:400]}"
+            print(f"UC registration via {_label} failed: {REGISTRATION_ERRORS[_label]}")
+    if registered_with is None:
+        # Third recipe: stop asking fe.log_model to infer an output spec, and state it.
+        #
+        # Both earlier recipes fail with the *same* MlflowException -- "a signature that
+        # includes only inputs" -- whether the model returns a numpy string array or a
+        # single-column DataFrame. So the output TYPE is not the problem: fe.log_model is
+        # not producing an output spec for this model at all. MLflow's own documented
+        # remedy for that error is to attach the signature explicitly, so:
+        #   1. log through fe.log_model (unregistered) to keep the feature spec attached,
+        #   2. set a signature carrying BOTH inputs and outputs on the logged artifact,
+        #   3. register that URI with mlflow.register_model.
+        # Step 1 has to stay fe.log_model, or the model loses automatic feature lookup
+        # and the endpoint would expect vf_0..vf_7 from the caller.
+        try:
+            from mlflow.models import ModelSignature, set_signature
+            from mlflow.types.schema import Schema, ColSpec
+
+            info = fe.log_model(**log_kwargs)
+            uri = getattr(info, "model_uri", None) or f"runs:/{run.info.run_id}/cr_retriever"
+            sig = ModelSignature(
+                inputs=Schema([ColSpec("string", "viewer_id"), ColSpec("long", "top_k")]),
+                outputs=Schema([ColSpec("string", "candidates")]),
+            )
+            set_signature(uri, sig)
+            mv = mlflow.register_model(uri, cfg.t("crunchyroll_retriever"))
+            RETRIEVER_REGISTERED = True
+            registered_with = "explicit signature + register_model"
+            print(f"registered to Unity Catalog with {registered_with} "
+                  f"(version {getattr(mv, 'version', '?')})")
+        except Exception as e:
+            REGISTRATION_ERRORS["explicit signature + register_model"] = (
+                f"{type(e).__name__}: {str(e)[:400]}")
+            print("third recipe failed:",
+                  REGISTRATION_ERRORS["explicit signature + register_model"])
+            print("logging to the run without registering, so the artifacts and metrics "
+                  "are still available")
+    if registered_with is not None:
+        mlflow.log_param("registered_with", registered_with)
 
     mlflow.log_metric("recall_at_60", recall_svd)
     mlflow.log_metric("recall_popularity_baseline", recall_popularity)
@@ -462,6 +536,7 @@ if not RETRIEVER_REGISTERED:
         "embedding_table": cfg.t("viewer_embedding_current"),
         "online_embedding_table": cfg.t("online_viewer_embedding"),
         "note": "endpoint deployment skipped: UC registration unresolved",
+        "registration_errors": REGISTRATION_ERRORS,
     }))
 # COMMAND ----------
 from databricks.sdk.service.serving import (

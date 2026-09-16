@@ -18,6 +18,7 @@ _common: &common_params
   lakebase_branch: ${var.lakebase_branch}
   lakebase_endpoint: ${var.lakebase_endpoint}
   ranker_endpoint: ${var.ranker_endpoint}
+  rail_ranker_endpoint: ${var.rail_ranker_endpoint}
   retriever_endpoint: ${var.retriever_endpoint}
   feature_endpoint: ${var.feature_endpoint}
   agent_endpoint: ${var.agent_endpoint}
@@ -136,6 +137,104 @@ resources:
             notebook_path: ../notebooks/13_ops_and_cost.py
             base_parameters: *common_params
           timeout_seconds: 1800
+
+    # ------------------------------------------------------------------ vertical
+    crfs_vertical:
+      name: crfs_vertical
+      description: >-
+        Vertical (rail) ranking on the feature store the horizontal ranker already
+        built: rail catalog and homepage log, two new feature tables published to
+        the same Lakebase store, a propensity-corrected rail ranker, a request-path
+        serving endpoint, and a whole homepage assembled by both models.
+      max_concurrent_runs: 1
+      queue:
+        enabled: true
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
+      tags:
+        demo: crunchyroll-feature-store
+        layer: vertical
+
+      tasks:
+        # Depends on notebook 00 having run: rail impressions are generated against
+        # the same viewers, titles and 90-day window as engagement_events, so the two
+        # logs describe one history rather than two unrelated ones.
+        - task_key: rail_data
+          notebook_task:
+            notebook_path: ../notebooks/20_rail_data_generation.py
+            base_parameters: *common_params
+          timeout_seconds: 2400
+
+        - task_key: rail_features
+          depends_on: [{task_key: rail_data}]
+          notebook_task:
+            notebook_path: ../notebooks/21_rail_features.py
+            base_parameters: *common_params
+          timeout_seconds: 3600
+
+        - task_key: train_rail_ranker
+          depends_on: [{task_key: rail_features}]
+          notebook_task:
+            notebook_path: ../notebooks/22_train_rail_ranker.py
+            base_parameters:
+              <<: *common_params
+              # See the widget comment in the notebook: at 1.0 the point-in-time join
+              # did not finish inside a 60-minute timeout, twice.
+              label_sample_frac: "0.25"
+          # Measured 25-30 min, almost all of it the point-in-time as-of join and the
+          # two collects to pandas. 3600s left too little headroom; the notebook now
+          # prints how long each load took so a slow run is diagnosable rather than
+          # indistinguishable from a hang.
+          timeout_seconds: 5400
+
+        - task_key: deploy_rail_endpoint
+          depends_on: [{task_key: train_rail_ranker}]
+          notebook_task:
+            notebook_path: ../notebooks/23_deploy_rail_endpoint.py
+            base_parameters: *common_params
+          # Route optimization is create-time only, so a first deployment here can
+          # include a delete-and-recreate plus a container build.
+          timeout_seconds: 5400
+
+        # Needs BOTH endpoints, so it is the one task that couples the two jobs.
+        # If crfs_end_to_end has not run, this is the task that says so.
+        - task_key: homepage_assembly
+          depends_on: [{task_key: deploy_rail_endpoint}]
+          notebook_task:
+            notebook_path: ../notebooks/24_homepage_assembly.py
+            base_parameters: *common_params
+          timeout_seconds: 1800
+
+    # Separate job, not a task on the spine: it puts real load on a live endpoint,
+    # takes a few minutes, and should be repeatable on its own after any config
+    # change without rebuilding anything.
+    crfs_benchmark:
+      name: crfs_benchmark
+      description: >-
+        Measure the rail-ranking endpoint under load from inside the workspace
+        region: fanout against candidates per request, a concurrency ramp, a traffic
+        spike, the same fanout against Feature Serving for attribution, and
+        server-side execution_time_ms from the inference table.
+      max_concurrent_runs: 1
+      tags:
+        demo: crunchyroll-feature-store
+        layer: ops
+      tasks:
+        - task_key: benchmark
+          notebook_task:
+            notebook_path: ../notebooks/25_serving_benchmark.py
+            base_parameters:
+              <<: *common_params
+              bench_ramp_levels: "1,2,4,8,16,32,64"
+              bench_fanout_sizes: "1,4,8,16,32"
+              bench_level_seconds: "12"
+              bench_spike_to: "48"
+              bench_rails_per_request: "12"
+              # Supported way to get the run id into a notebook. Reading it from the
+              # command context is blocked on serverless compute.
+              run_id: "{{job.run_id}}"
+          timeout_seconds: 3600
 
     # ---------------------------------------------------------------- satellites
     crfs_streaming:

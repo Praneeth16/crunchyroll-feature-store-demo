@@ -5,12 +5,14 @@
 # Why this is a script and not an app resource: declaring a serving_endpoint
 # resource for an endpoint that does not exist yet makes app creation fail with
 # 404 RESOURCE_DOES_NOT_EXIST, so `bundle deploy` would be impossible on a fresh
-# workspace until the whole pipeline had run. Re-run this after notebooks 07, 08
-# and 12 have created their endpoints.
+# workspace until the whole pipeline had run. Re-run this after notebooks 07, 08,
+# 12 and 23 have created their endpoints.
 set -uo pipefail
 PROFILE="${1:-fe-vm-lakebase-praneeth}"
 APP="${APP:-crfs-watch-next}"
-ENDPOINTS="${ENDPOINTS:-crunchyroll-candidate-retriever crunchyroll-viewer-features crunchyroll-explainer-agent}"
+# crunchyroll-rail-ranker is included: the app's vertical-ranking page cannot render
+# without CAN_QUERY on it, and it is created by notebook 23 rather than by the bundle.
+ENDPOINTS="${ENDPOINTS:-crunchyroll-rail-ranker crunchyroll-candidate-retriever crunchyroll-viewer-features crunchyroll-explainer-agent}"
 DB=$(command -v databricks || echo /opt/homebrew/bin/databricks)
 
 SP=$("$DB" apps get "$APP" --profile "$PROFILE" -o json 2>/dev/null \

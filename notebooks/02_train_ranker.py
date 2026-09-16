@@ -124,12 +124,20 @@ CATEGORICAL = ["surface", "device", "locale", "last_primary_genre"]
 encoders = {c: {v: i for i, v in enumerate(sorted(train_pdf[c].astype(str).unique()))} for c in CATEGORICAL}
 
 def encode(df):
+    # An absent column must become a full Series, not a scalar. `df[c] if c in df else 0`
+    # yields the int 0, and `pd.to_numeric(0).fillna(...)` raises
+    # `AttributeError: 'int' object has no attribute 'fillna'`; the categorical branch
+    # has the same defect with the bare string ("unknown".astype). Model Serving surfaces
+    # either as `Error ''` with no traceback, which cost hours on the rail ranker
+    # (docs/verification_log.md V28-V30). Both branches now build an explicit Series.
     X = pd.DataFrame(index=df.index)
     for c in NUMERIC:
-        X[c] = pd.to_numeric(df[c] if c in df else 0, errors="coerce").fillna(0.0)
+        col = df[c] if c in df else pd.Series(0.0, index=df.index)
+        X[c] = pd.to_numeric(col, errors="coerce").fillna(0.0)
     for c in CATEGORICAL:
         m = encoders[c]
-        X[c] = (df[c] if c in df else "unknown").astype(str).map(lambda v, m=m: m.get(v, len(m))).astype(float)
+        col = df[c] if c in df else pd.Series("unknown", index=df.index)
+        X[c] = col.astype(str).map(lambda v, m=m: m.get(v, len(m))).astype(float)
     return X[NUMERIC + CATEGORICAL].values
 
 from sklearn.ensemble import HistGradientBoostingClassifier
@@ -164,13 +172,20 @@ class CrunchyrollRanker(mlflow.pyfunc.PythonModel):
             self.encoders = pickle.load(f)
 
     def predict(self, context, model_input):
+        # Same explicit-Series construction as encode() above, and it matters more here:
+        # this is the path Model Serving runs, where a missing optional column arrives as
+        # an absent key rather than a null and the scalar form raises AttributeError
+        # inside the container. The two must stay identical or training and serving encode
+        # differently -- which is the whole failure mode this architecture avoids.
         df = model_input.copy()
         X = pd.DataFrame(index=df.index)
         for c in self.NUMERIC:
-            X[c] = pd.to_numeric(df[c] if c in df else 0, errors="coerce").fillna(0.0)
+            col = df[c] if c in df else pd.Series(0.0, index=df.index)
+            X[c] = pd.to_numeric(col, errors="coerce").fillna(0.0)
         for c in self.CATEGORICAL:
             m = self.encoders.get(c, {})
-            X[c] = (df[c] if c in df else "unknown").astype(str).map(lambda v, m=m: m.get(v, len(m))).astype(float)
+            col = df[c] if c in df else pd.Series("unknown", index=df.index)
+            X[c] = col.astype(str).map(lambda v, m=m: m.get(v, len(m))).astype(float)
         return self.model.predict_proba(X[self.NUMERIC + self.CATEGORICAL].values)[:, 1]
 # COMMAND ----------
 # MAGIC %md

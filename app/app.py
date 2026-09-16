@@ -1,12 +1,18 @@
-"""Crunchyroll Feature Store — Watch Next Viewer Simulator
+"""Crunchyroll Feature Store — homepage simulator
 
-Six regions demonstrating the feature store end-to-end:
-1. Sidebar: viewer picker, surface/device/locale, frozen vs real clock, model version
-2. Funnel strip: 132 catalog → 60 retrieved → N entitled → 25 ranked + latency
-3. Ranked cards: title, genre, score, "Why?" explainer
-4. Raw Lakebase panel: actual online store rows with SQL text and latency
-5. "Watch 3 episodes" button: burst job → poll Postgres → live freshness readout
-6. Ops footer: online store capacity, per-table sync lag, today's spend
+Two rankers on one feature store:
+  * VERTICAL   which rails, in what order  (crunchyroll-rail-ranker)
+  * HORIZONTAL which titles inside a rail   (crunchyroll-watch-next-ranker)
+
+Regions:
+1. Sidebar: viewer, request context, frozen vs real clock
+2. Vertical ranking: eligible rails scored in one request, against the incumbent
+   editorial order, with the online rows the endpoint looked up
+3. Funnel strip: catalog → retrieved → entitled → ranked, with latency
+4. Ranked titles: the horizontal ranker inside the top rail
+5. Raw Lakebase panel: the actual online store rows, with SQL text and latency
+6. "Watch 3 episodes": burst job → poll Postgres → live freshness readout
+7. Ops footer: online store capacity, per-table sync lag, today's spend
 """
 import os
 import json
@@ -27,6 +33,7 @@ CATALOG = os.environ.get("DATABRICKS_CATALOG", "serverless_lakebase_praneeth_cat
 SCHEMA = os.environ.get("DATABRICKS_SCHEMA", "crunchyroll_demo")
 WAREHOUSE_ID = os.environ.get("DATABRICKS_WAREHOUSE_ID", "4d39ac2e32b72a3a")
 RANKER_ENDPOINT = os.environ.get("RANKER_ENDPOINT", "crunchyroll-watch-next-ranker")
+RAIL_RANKER_ENDPOINT = os.environ.get("RAIL_RANKER_ENDPOINT", "crunchyroll-rail-ranker")
 RETRIEVER_ENDPOINT = os.environ.get("RETRIEVER_ENDPOINT", "crunchyroll-candidate-retriever")
 FEATURE_ENDPOINT = os.environ.get("FEATURE_ENDPOINT", "crunchyroll-viewer-features")
 LAKEBASE_PROJECT = os.environ.get("LAKEBASE_PROJECT", "crunchyroll-online-store")
@@ -62,8 +69,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.title("🎬 Crunchyroll Watch Next Ranker")
-st.markdown("Feature Store → Online Store → Ranking → Freshness Loop")
+st.title("🎬 Crunchyroll homepage — two rankers, one feature store")
+st.markdown(
+    "**Vertical** ranks the rails · **Horizontal** ranks the titles inside them · "
+    "both do their own lookups against the same Lakebase online store")
 
 # ============================================================================
 # REGION 1: Sidebar — Viewer picker, surface, clock toggle, model version
@@ -174,7 +183,271 @@ def rank_candidates(w, candidates_df: pd.DataFrame, viewer_id: str,
 
 
 # ============================================================================
-# REGION 2: Funnel strip — Show 132 → 60 → N → 25 with latencies
+# REGION 2: Vertical ranking — which rails, in what order
+#
+# One request carries the viewer, the context and every eligible rail. The
+# endpoint looks up rail_features and viewer_rail_features_ts itself, evaluates
+# five request-time UDFs, and returns the rails already ranked.
+# ============================================================================
+st.header("Vertical ranking · the homepage rail order")
+
+# Anchored on the newest event, not on current_timestamp(), and on the same 7-day
+# in-progress window the homepage log was generated with. Measured 2026-09-16: with
+# a 30-day wall-clock window every rail was eligible for every viewer, which quietly
+# removed the varying-eligible-set property the serving contract exists to handle.
+# Mirrors src/crfs/rails.ELIGIBLE_RAILS_SQL and INPROGRESS_DAYS.
+RAIL_STATE_SQL = """
+WITH clock AS (
+  SELECT MAX(event_ts) AS as_of FROM {fq}.engagement_events
+),
+watched AS (
+  SELECT title_id, MAX(event_ts) AS last_ts
+  FROM {fq}.engagement_events
+  WHERE viewer_id = '{viewer}' AND watch_seconds > 0
+  GROUP BY title_id
+)
+SELECT
+  (SELECT COUNT(*) FROM watched, clock
+    WHERE last_ts > clock.as_of - INTERVAL 7 DAY) AS inprogress,
+  (SELECT COUNT(*) FROM watched) AS history,
+  (SELECT COUNT(*) FROM watched w JOIN {fq}.titles t ON t.title_id = w.title_id
+    WHERE t.is_simulcast) AS simulcast
+"""
+
+
+def _sql(w, statement):
+    """Run a statement and return a DataFrame, or raise.
+
+    The previous version returned an empty DataFrame whenever `res.result` was absent,
+    which conflated three completely different outcomes: a query that returned zero
+    rows, a query still RUNNING after the 30s wait_timeout, and a query that FAILED.
+    The visible effect was that the app rendered "No rail catalog yet - run
+    `make vertical`" while the rails table sat there with 16 rows, because the real
+    answer was PERMISSION_DENIED: the app's service principal had no Unity Catalog
+    grants. A blank panel blamed the pipeline for an access problem.
+
+    Now: poll while the statement is still running, and raise on anything that is not
+    SUCCEEDED so the caller's except branch reports the actual cause.
+    """
+    import time as _t
+
+    def _state(r):
+        """The state's VALUE, not its repr.
+
+        `str(StatementState.SUCCEEDED)` is "StatementState.SUCCEEDED", so comparing the
+        str() against "SUCCEEDED" fails for every outcome including success. The first
+        version of this function did exactly that and turned every query into a
+        RuntimeError -- the third time in this codebase that an SDK enum's repr was
+        mistaken for its value (see loadtest._plain and notebook 23's poll).
+        """
+        st_obj = getattr(r, "status", None)
+        raw = getattr(st_obj, "state", None)
+        return str(getattr(raw, "value", raw) or "")
+
+    res = w.statement_execution.execute_statement(
+        statement=statement, warehouse_id=WAREHOUSE_ID, wait_timeout="30s")
+    state = _state(res)
+    deadline = _t.time() + 60
+    while state in ("PENDING", "RUNNING") and _t.time() < deadline:
+        _t.sleep(1)
+        res = w.statement_execution.get_statement(res.statement_id)
+        state = _state(res)
+    if state != "SUCCEEDED":
+        err = getattr(getattr(res, "status", None), "error", None)
+        detail = getattr(err, "message", None) or state or "unknown"
+        raise RuntimeError(f"{state or 'NO_STATE'}: {detail}")
+    rows = (res.result.data_array if res.result else None) or []
+    cols = [c.name for c in res.manifest.schema.columns] if res.manifest else []
+    return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
+
+
+@st.cache_data(ttl=300)
+def get_rails():
+    """The rail catalog. Cached: 16 rows that change when the pipeline reruns."""
+    try:
+        return _sql(get_workspace_client(),
+                    f"SELECT rail_id, rail_name, rail_type, rail_genre, editorial_rank, "
+                    f"is_personalized FROM {FQ}.rails ORDER BY editorial_rank")
+    except Exception as e:
+        st.warning(f"Rail catalog unavailable: {type(e).__name__}: {str(e)[:300]}")
+        return pd.DataFrame()
+
+
+def eligible_rails(w, viewer: str, rails: pd.DataFrame) -> pd.DataFrame:
+    """Eligibility is a hard filter applied before scoring, never a model feature.
+
+    Mirrors src/crfs/rails.STATE_DEPENDENT and the same stable watchlist trait the
+    generator used, so the app's eligible set matches the log the model saw.
+    """
+    if rails.empty:
+        return rails
+    try:
+        state = _sql(w, RAIL_STATE_SQL.format(fq=FQ, viewer=viewer))
+        inprog = int(state["inprogress"].iloc[0]) > 0
+        history = int(state["history"].iloc[0]) > 0
+        simul = int(state["simulcast"].iloc[0]) > 0
+    except Exception as e:
+        # Fail open, but say so. Defaulting all three to True makes every rail
+        # eligible, which looks exactly like a correct homepage -- and that is how the
+        # 30-day-wall-clock bug survived in the first place.
+        st.warning(f"Could not evaluate rail eligibility ({type(e).__name__}); showing "
+                   f"all 16 rails. The eligible set below is NOT filtered.")
+        inprog = history = simul = True
+    import hashlib
+    h = hashlib.sha256(f"watchlist|{viewer}".encode()).hexdigest()
+    watchlist = (int(h[:12], 16) / float(16 ** 12)) < 0.62
+
+    gate = {"r_continue": inprog, "r_because": history,
+            "r_new_eps": simul, "r_watchlist": watchlist}
+    keep = rails["rail_id"].map(lambda r: gate.get(r, True))
+    return rails[keep].reset_index(drop=True)
+
+
+def rank_rails(w, viewer: str, rails: pd.DataFrame, device: str, locale: str,
+               hour: int, epoch: int):
+    """One request, one row per candidate rail. Returns (ranked_df, ms)."""
+    if rails.empty:
+        return pd.DataFrame(), 0.0
+    dow = dt.datetime.fromtimestamp(epoch).weekday()
+    records = [{"viewer_id": viewer, "rail_id": str(r), "device": device,
+                "locale": locale, "hour_of_day": int(hour), "day_of_week": int(dow),
+                "request_epoch_s": int(epoch)}
+               for r in rails["rail_id"]]
+    try:
+        t0 = time.perf_counter()
+        resp = w.serving_endpoints.query(name=RAIL_RANKER_ENDPOINT,
+                                         dataframe_records=records)
+        ms = (time.perf_counter() - t0) * 1000.0
+    except Exception as e:
+        st.error(f"Rail ranker unavailable: {type(e).__name__}: {e}")
+        return pd.DataFrame(), 0.0
+
+    out = pd.DataFrame(list(resp.predictions or []))
+    if out.empty:
+        return out, ms
+    out = out.merge(rails, on="rail_id", how="left").sort_values("rail_rank")
+    # editorial_rank is the catalog-wide 1..16; rail_rank is dense 1..N over the
+    # ELIGIBLE rails only. Subtracting them directly gives every rail a free positive
+    # "gain" for each ineligible rail ranked above it -- so a model reproducing the
+    # incumbent order exactly would still report rails moving up. Dense-rank the
+    # incumbent within the same eligible set so the two are comparable and a column of
+    # zeros really does mean "agrees with the old homepage".
+    incumbent = out["editorial_rank"].astype(int).rank(method="first").astype(int)
+    out["moved"] = incumbent - out["rail_rank"].astype(int)
+    return out.reset_index(drop=True), ms
+
+
+rails_all = get_rails()
+if rails_all.empty:
+    st.info("No rail catalog yet — run `make vertical` to build the vertical path.")
+    ranked_rails, rail_ms = pd.DataFrame(), 0.0
+else:
+    elig = eligible_rails(get_workspace_client(), viewer_id, rails_all)
+    with st.spinner("Ranking rails..."):
+        ranked_rails, rail_ms = rank_rails(
+            get_workspace_client(), viewer_id, elig, device, locale,
+            hour_override, request_epoch_s)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Rails in catalog", len(rails_all))
+    c2.metric("Eligible for this viewer", len(elig),
+              help="Continue Watching, Because You Watched, New Episodes and "
+                   "Watchlist depend on viewer state. Eligibility is a hard filter "
+                   "applied before scoring, not a feature.")
+    c3.metric("Scored in one request", len(ranked_rails))
+    c4.metric("Vertical call", f"{rail_ms:.0f} ms",
+              help="One HTTP request. Every feature was retrieved by the endpoint, "
+                   "not sent by this app.")
+
+if not ranked_rails.empty:
+    left, right = st.columns([3, 2])
+    with left:
+        st.subheader("Ranked rails")
+        show = ranked_rails[["rail_rank", "rail_name", "rail_type",
+                             "engagement_probability", "editorial_rank", "moved"]].copy()
+        show["engagement_probability"] = show["engagement_probability"].map("{:.4f}".format)
+        show = show.rename(columns={"rail_rank": "#", "rail_name": "rail",
+                                    "rail_type": "type",
+                                    "engagement_probability": "P(engage)",
+                                    "editorial_rank": "old #",
+                                    "moved": "moved"})
+        st.dataframe(show, hide_index=True, use_container_width=True)
+        gained = int((ranked_rails["moved"] > 0).sum())
+        st.caption(f"`moved` is positions gained against the incumbent editorial "
+                   f"order. {gained} of {len(ranked_rails)} rails moved up. A column "
+                   f"of zeros would mean the model agrees with the old homepage.")
+
+    with right:
+        st.subheader("What the request carried")
+        st.code(json.dumps({
+            "viewer_id": viewer_id, "rail_id": ranked_rails.iloc[0]["rail_id"],
+            "device": device, "locale": locale,
+            "hour_of_day": int(hour_override), "day_of_week": int(
+                dt.datetime.fromtimestamp(request_epoch_s).weekday()),
+            "request_epoch_s": int(request_epoch_s),
+        }, indent=2), language="json")
+        st.caption("Seven fields. The 47 feature values the model scored on came from "
+                   "four feature tables and five UC Python UDFs, all resolved inside "
+                   "the endpoint.")
+
+        st.subheader("The online row it looked up")
+        top_rail = ranked_rails.iloc[0]["rail_id"]
+        try:
+            store = get_online_store()
+            row, cols, ms = store.keyed_read_composite(
+                "online_viewer_rail", {"viewer_id": viewer_id, "rail_id": top_rail})
+            if row:
+                st.dataframe(pd.DataFrame([dict(zip(cols, row))]).T.rename(
+                    columns={0: "value"}), use_container_width=True)
+                st.caption(f"composite-key read on `online_viewer_rail` "
+                           f"(viewer_id, rail_id) — {ms:.1f} ms from this app")
+            else:
+                st.caption(f"no online row for ({viewer_id}, {top_rail}) — the "
+                           f"endpoint would score it on defaults")
+        except Exception as e:
+            st.caption(f"direct Postgres read unavailable ({type(e).__name__}); "
+                       f"the endpoint's own lookup is unaffected")
+
+    # ---- context sensitivity -------------------------------------------------
+    with st.expander("Same viewer, four contexts — proof the request-time features matter"):
+        st.caption("Nothing in the feature store changes between these calls. Only "
+                   "the request does.")
+        if st.button("Score all four contexts"):
+            ctxs = [("21:00 TV", "tv", 21), ("09:00 TV", "tv", 9),
+                    ("21:00 mobile", "mobile", 21), ("09:00 mobile", "mobile", 9)]
+            orders, lats = {}, {}
+            for label, dev, hr in ctxs:
+                epoch = int(dt.datetime.fromtimestamp(request_epoch_s)
+                            .replace(hour=hr).timestamp())
+                df, ms = rank_rails(get_workspace_client(), viewer_id, elig,
+                                    dev, locale, hr, epoch)
+                lats[label] = ms
+                if not df.empty:
+                    orders[label] = df.set_index("rail_id")["rail_rank"].to_dict()
+            if orders:
+                comp = pd.DataFrame(orders)
+                comp.insert(0, "rail", [
+                    rails_all.set_index("rail_id")["rail_name"].get(i, i)
+                    for i in comp.index])
+                # Compare against the first context that actually returned. Indexing
+                # ctxs[0] unconditionally raised KeyError when that one call failed and
+                # a later one succeeded -- `orders` is non-empty, so the guard above
+                # passes and the page died on a transient endpoint hiccup.
+                ref = next((lab for lab, _, _ in ctxs if lab in comp), None)
+                comp = comp.sort_values(ref) if ref else comp
+                st.dataframe(comp, hide_index=True, use_container_width=True)
+                base = comp[ref] if ref else None
+                moves = {lab: int((comp[lab] != base).sum())
+                         for lab, _, _ in ctxs if lab in comp and lab != ref} \
+                        if ref is not None else {}
+                st.write(" · ".join(f"**{k}** moves {v} rails" for k, v in moves.items()))
+                st.caption("latency: " + " · ".join(f"{k} {v:.0f} ms"
+                                                    for k, v in lats.items()))
+
+st.divider()
+
+# ============================================================================
+# REGION 3: Funnel strip — Show 132 → 60 → N → 25 with latencies
 # ============================================================================
 st.header("Funnel")
 
@@ -369,7 +642,7 @@ if burst_button:
             after_ranked = new_ranked
             st.subheader("Ranking after the burst")
             st.caption(f"re-ranked in {new_ms:0.0f} ms")
-            st.dataframe(after_ranked.head(10), width="stretch")
+            st.dataframe(after_ranked.head(10), use_container_width=True)
         except Exception as e:
             st.warning(f"re-rank failed: {str(e)[:200]}")
 
@@ -412,7 +685,7 @@ def read_sync_lag(tables):
             out.append({"table": t, "state": status.get("detailed_state"),
                         "lag_seconds": None if lag is None else round(lag, 1)})
         except Exception as e:
-            out.append({"table": t, "state": f"unavailable ({str(e)[:40]})", "lag_seconds": None})
+            out.append({"table": t, "state": f"unavailable ({str(e)[:220]})", "lag_seconds": None})
     return out
 
 
@@ -462,7 +735,7 @@ with ops_b:
     try:
         lag = read_sync_lag(["online_viewer_features", "online_recent_behavior",
                              "online_title_features", "online_session_features"])
-        st.dataframe(pd.DataFrame(lag), width="stretch", hide_index=True)
+        st.dataframe(pd.DataFrame(lag), use_container_width=True, hide_index=True)
     except Exception as e:
         st.warning(f"sync state unavailable: {str(e)[:160]}")
 
@@ -471,7 +744,7 @@ with ops_c:
     try:
         cost = read_cost(ep_info.get("uid") or "")
         if len(cost):
-            st.dataframe(cost, width="stretch", hide_index=True)
+            st.dataframe(cost, use_container_width=True, hide_index=True)
             st.caption("List prices, from system.billing. Committed rates will be lower.")
         else:
             st.caption("No billing rows yet.")

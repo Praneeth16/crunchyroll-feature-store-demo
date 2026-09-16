@@ -21,6 +21,10 @@ DEFAULTS = {
     "lakebase_branch": "production",
     "lakebase_endpoint": "primary",
     "ranker_endpoint": "crunchyroll-watch-next-ranker",
+    # Vertical ranking (rails). Separate endpoint from the horizontal ranker
+    # because the two are sized differently: the rail ranker sits in the homepage
+    # request path and never scales to zero, the watch-next ranker does.
+    "rail_ranker_endpoint": "crunchyroll-rail-ranker",
     "retriever_endpoint": "crunchyroll-candidate-retriever",
     "feature_endpoint": "crunchyroll-viewer-features",
     "agent_endpoint": "crunchyroll-explainer-agent",
@@ -40,6 +44,7 @@ class Config:
     lakebase_branch: str
     lakebase_endpoint: str
     ranker_endpoint: str
+    rail_ranker_endpoint: str
     retriever_endpoint: str
     feature_endpoint: str
     agent_endpoint: str
@@ -115,6 +120,7 @@ class Config:
         return "\n".join(
             f"  {k:20s} {getattr(self, k)}"
             for k in ("catalog", "schema", "online_store", "ranker_endpoint",
+                      "rail_ranker_endpoint",
                       "retriever_endpoint", "feature_endpoint", "agent_endpoint",
                       "llm_endpoint", "warehouse_id")
         ) + f"\n  {'end_date_resolved':20s} {self.end_date_resolved}"

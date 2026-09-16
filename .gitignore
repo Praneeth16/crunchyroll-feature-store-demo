@@ -10,3 +10,5 @@ app/.venv/
 secrets.env
 .env
 .claude/
+.crfs.vars
+dashboards/generated/

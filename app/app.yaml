@@ -30,6 +30,8 @@ env:
 
   - name: RANKER_ENDPOINT
     value: "${RANKER_ENDPOINT}"
+  - name: RAIL_RANKER_ENDPOINT
+    value: "${RAIL_RANKER_ENDPOINT}"
   - name: RETRIEVER_ENDPOINT
     value: "${RETRIEVER_ENDPOINT}"
   - name: FEATURE_ENDPOINT

@@ -23,8 +23,10 @@ CATALOG="${CATALOG:-serverless_lakebase_praneeth_catalog}"
 SCHEMA="${SCHEMA:-crunchyroll_demo}"
 STORE="${STORE:-crunchyroll-online-store}"
 APP="${APP:-crfs-watch-next}"
-ENDPOINTS="${ENDPOINTS:-crunchyroll-explainer-agent crunchyroll-viewer-features crunchyroll-candidate-retriever crunchyroll-watch-next-ranker}"
-ONLINE="${ONLINE:-online_viewer_features online_title_features online_recent_behavior online_viewer_embedding online_session_features}"
+# The rail ranker leads: it is the only endpoint without scale-to-zero, so it is
+# the one that is billing right now whether or not anyone is querying it.
+ENDPOINTS="${ENDPOINTS:-crunchyroll-rail-ranker crunchyroll-explainer-agent crunchyroll-viewer-features crunchyroll-candidate-retriever crunchyroll-watch-next-ranker}"
+ONLINE="${ONLINE:-online_viewer_features online_title_features online_recent_behavior online_viewer_embedding online_session_features online_rail_features online_viewer_rail}"
 DB=$(command -v databricks || echo /opt/homebrew/bin/databricks)
 # Resolve the repo root from this script's location. Assuming cwd silently
 # skipped step 4 (dropping synced tables) when run from elsewhere.

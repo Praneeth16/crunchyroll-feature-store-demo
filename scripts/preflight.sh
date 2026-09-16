@@ -12,9 +12,17 @@ for arg in "$@"; do
   [ "$arg" = "--resize" ] && RESIZE=1
 done
 
-CATALOG="${CATALOG:-serverless_lakebase_praneeth_catalog}"
-SCHEMA="${SCHEMA:-crunchyroll_demo}"
-STORE="${STORE:-crunchyroll-online-store}"
+# Prefer whatever scripts/bootstrap.sh discovered. Falling back to this workspace's
+# ids is fine for the author and wrong for everyone else, so the fallback is last.
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -f "$HERE/.crfs.vars" ]; then
+  CRFS_CATALOG=$(grep '^catalog=' "$HERE/.crfs.vars" | cut -d= -f2-)
+  CRFS_SCHEMA=$(grep '^schema=' "$HERE/.crfs.vars" | cut -d= -f2-)
+  CRFS_STORE=$(grep '^online_store=' "$HERE/.crfs.vars" | cut -d= -f2-)
+fi
+CATALOG="${CATALOG:-${CRFS_CATALOG:-serverless_lakebase_praneeth_catalog}}"
+SCHEMA="${SCHEMA:-${CRFS_SCHEMA:-crunchyroll_demo}}"
+STORE="${STORE:-${CRFS_STORE:-crunchyroll-online-store}}"
 PROJECT="${PROJECT:-$STORE}"
 BRANCH="${BRANCH:-production}"
 ENDPOINT="${ENDPOINT:-primary}"
