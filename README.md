@@ -31,6 +31,12 @@ lifecycle, online inference, production serving, and an explicit list of what
 Databricks provides versus what Crunchyroll would build and operate.
 [docs/serving_benchmark.md](docs/serving_benchmark.md) — the measured serving
 numbers, written by the benchmark job rather than by hand.
+[docs/batch_and_online.md](docs/batch_and_online.md) — **the batch path and what carries
+over to online.** Read this if the near-term deliverable is batch: same features, same
+model, `score_batch` offline, and the measured proof that batch and online produce the
+identical collection order.
+[docs/open_items.md](docs/open_items.md) — what is unfinished or undecided, and the one
+question only Crunchyroll can answer (whether rendered rail position is in their log).
 
 ## Contents
 

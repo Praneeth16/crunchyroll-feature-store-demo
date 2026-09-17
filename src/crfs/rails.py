@@ -409,24 +409,41 @@ def rail_audience(spark, impressions_table: str, as_of: pd.Timestamp) -> pd.Data
 
 
 def build_rail_features(rails_pdf: pd.DataFrame, rail_titles_pdf: pd.DataFrame,
-                        titles_pdf: pd.DataFrame, audience: pd.DataFrame,
-                        as_of: pd.Timestamp) -> pd.DataFrame:
+                        title_features_pdf: pd.DataFrame,
+                        audience: pd.DataFrame) -> pd.DataFrame:
     """Per-rail features: the pre-aggregated audience behaviour from
     `rail_audience` joined to the content each rail carries.
 
     Sixteen rows in, sixteen rows out -- pandas is the right tool at this size and
     the wrong one for the log the aggregate came from.
+
+    Content stats come from the **`title_features` feature table**, not from the raw
+    `titles` table. That is the whole point of the shared feature store and it was not
+    true in the first version of this function, which read `titles` directly and so
+    shared title signal at source-data level only (verification_log V57). Three
+    consequences of the change, all improvements:
+
+      * `rail_content_age_days` now averages the governed `days_since_release` instead
+        of recomputing age from `release_year` against a July-1 approximation -- one
+        definition of content age instead of two that can drift;
+      * `rail_avg_popularity` now averages the observed `popularity_30d` rather than
+        the generator's latent `intrinsic_popularity`, which also removes a mild
+        leakage: intrinsic_popularity is a parameter that *produced* the engagement
+        this model is trained to predict;
+      * `avg_rating` and `is_simulcast` come from the same table the watch-next ranker
+        reads, so the two models cannot disagree about what those mean.
+
+    Both popularity columns are on a 0-1 scale (verified: intrinsic 0.11-0.99 mean
+    0.55, observed 0.01-1.00 mean 0.26), so this changes the values without changing
+    the feature's range or sign.
     """
-    t = titles_pdf.copy()
-    t["release_ts"] = pd.to_datetime(t["release_year"].astype(int).astype(str) + "-07-01")
-    t["age_days"] = (as_of - t["release_ts"]).dt.days
-    members = rail_titles_pdf.merge(t, on="title_id", how="left")
+    members = rail_titles_pdf.merge(title_features_pdf, on="title_id", how="left")
 
     content = (members.groupby("rail_id")
                .agg(rail_titles_available=("title_id", "count"),
-                    rail_avg_popularity=("intrinsic_popularity", "mean"),
+                    rail_avg_popularity=("popularity_30d", "mean"),
                     rail_avg_rating=("avg_rating", "mean"),
-                    rail_content_age_days=("age_days", "mean"),
+                    rail_content_age_days=("days_since_release", "mean"),
                     rail_simulcast_share=("is_simulcast", "mean"))
                .reset_index())
 
@@ -653,3 +670,80 @@ def rail_request_records(viewer_id: str, rail_ids, device: str = "tv",
          "request_epoch_s": epoch}
         for r in rail_ids
     ]
+
+
+# ------------------------------------------------------------------ set-wide eligibility
+ELIGIBLE_RAILS_ALL_SQL = """
+WITH clock AS (
+  {clock_expr}
+),
+watched AS (
+  SELECT viewer_id, title_id, MAX(event_ts) AS last_ts
+  FROM {fq}.engagement_events
+  WHERE watch_seconds > 0
+  GROUP BY viewer_id, title_id
+),
+state AS (
+  SELECT v.viewer_id,
+         COALESCE(MAX(CASE WHEN w.last_ts > c.as_of - INTERVAL {inprogress_days} DAY
+                           THEN 1 ELSE 0 END), 0) = 1                       AS has_inprogress,
+         COALESCE(MAX(CASE WHEN w.title_id IS NOT NULL THEN 1 ELSE 0 END), 0) = 1
+                                                                            AS has_history,
+         COALESCE(MAX(CASE WHEN t.is_simulcast THEN 1 ELSE 0 END), 0) = 1    AS has_simulcast_history
+  FROM {fq}.viewers v
+  CROSS JOIN clock c
+  LEFT JOIN watched w ON w.viewer_id = v.viewer_id
+  LEFT JOIN {fq}.titles t ON t.title_id = w.title_id
+  {viewer_filter}
+  GROUP BY v.viewer_id
+)
+SELECT s.viewer_id, r.rail_id
+FROM state s
+CROSS JOIN {fq}.rails r
+LEFT JOIN viewer_watchlist_flag f ON f.viewer_id = s.viewer_id
+WHERE CASE r.rail_id
+        WHEN 'r_continue'  THEN s.has_inprogress
+        WHEN 'r_because'   THEN s.has_history
+        WHEN 'r_new_eps'   THEN s.has_simulcast_history
+        WHEN 'r_watchlist' THEN COALESCE(f.has_watchlist, false)
+        ELSE true
+      END
+"""
+
+
+def eligible_rails_all(spark, fq: str, viewers=None, as_of=None):
+    """Eligible (viewer_id, rail_id) pairs for many viewers, as a Spark DataFrame.
+
+    The batch twin of `eligible_rails`. That one interpolates a single viewer id into
+    the SQL and returns pandas, which is right for one homepage and wrong for scoring
+    a whole population -- 300 separate queries at demo scale, millions at Crunchyroll's.
+
+    Same gating rules, evaluated set-wide, so a batch-scored table and a live request
+    agree about which collections a viewer is allowed to see. If these two ever
+    disagreed, batch and online would differ for reasons that have nothing to do with
+    the model.
+
+    `has_watchlist` is a deterministic function of the viewer id in this demo, so it is
+    materialised into a small helper table rather than reimplemented in SQL -- one
+    definition, same answer in both paths.
+    """
+    from pyspark.sql import functions as F
+
+    clock_expr = (f"SELECT TIMESTAMP'{as_of}' AS as_of" if as_of is not None
+                  else f"SELECT MAX(event_ts) AS as_of FROM {fq}.engagement_events")
+
+    # Materialise the watchlist trait as a temp view so the SQL below and the
+    # single-viewer path read the same Python definition instead of two copies.
+    vids = [r["viewer_id"] for r in spark.sql(f"SELECT viewer_id FROM {fq}.viewers").collect()]
+    spark.createDataFrame(
+        [(v, bool(has_watchlist(v))) for v in vids],
+        ["viewer_id", "has_watchlist"]).createOrReplaceTempView("viewer_watchlist_flag")
+
+    viewer_filter = ""
+    if viewers:
+        ids = ",".join(f"'{v}'" for v in viewers)
+        viewer_filter = f"WHERE v.viewer_id IN ({ids})"
+
+    return spark.sql(ELIGIBLE_RAILS_ALL_SQL.format(
+        fq=fq, clock_expr=clock_expr, inprogress_days=INPROGRESS_DAYS,
+        viewer_filter=viewer_filter))

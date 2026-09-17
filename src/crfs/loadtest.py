@@ -432,3 +432,95 @@ def endpoint_config_summary(w, endpoint: str) -> dict:
                              "enabled": _plain(inf.enabled)}
                             if inf else None),
     }
+
+
+def sustained_phase(client, payload, concurrency: int = 32, total_s: float = 600.0,
+                    window_s: float = 30.0):
+    """Hold one concurrency level for minutes and report throughput per window.
+
+    This phase exists because the most consequential finding in this project was
+    discovered by accident. Two ramp sweeps happened to run ten minutes apart and the
+    second delivered 2.6x the throughput of the first -- same endpoint, same config,
+    same payload (verification_log V50). That is autoscaling, and nothing in the
+    benchmark was actually measuring it: `ramp_phase` gives each level 12 seconds,
+    which is long enough to measure a steady state at current capacity and far too
+    short to observe capacity arriving.
+
+    So this holds load steady and slices the result by wall-clock window. The output is
+    the shape Crunchyroll needs for capacity planning and that a percentile table
+    cannot express: how long after load arrives does throughput stop climbing.
+
+    Reported per window rather than aggregated, because the aggregate over a scale-up
+    period is a number that describes no moment of the run.
+    """
+    samples = []
+    t0 = time.perf_counter()
+    stop_at = t0 + total_s
+    import threading
+    lock = threading.Lock()
+
+    def worker():
+        local = []
+        while time.perf_counter() < stop_at:
+            local.append(client.post(payload))
+        return local
+
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        for chunk in pool.map(lambda _: worker(), range(concurrency)):
+            samples.extend(chunk)
+    wall = time.perf_counter() - t0
+
+    # Bucket by window using the wall-clock start each sample recorded.
+    if not samples:
+        return [], {}
+    base = min(s.started for s in samples)
+    buckets = {}
+    for s in samples:
+        w = int((s.started - base) // window_s)
+        buckets.setdefault(w, []).append(s)
+
+    windows = []
+    for w in sorted(buckets):
+        rows = buckets[w]
+        ok = [r for r in rows if r.status == 200]
+        errs = {}
+        for r in rows:
+            if r.status != 200:
+                key = f"http_{r.status}" if r.status else "transport"
+                errs[key] = errs.get(key, 0) + 1
+        windows.append(PhaseResult(
+            phase="sustained",
+            concurrency=concurrency,
+            rows_per_request=len(payload),
+            requests=len(rows),
+            duration_s=round(window_s, 1),
+            ok=len(ok),
+            errors=errs,
+            latency=percentiles([r.elapsed_ms for r in ok]),
+            rps=round(len(ok) / window_s, 1),
+            note=f"t+{int(w * window_s)}-{int((w + 1) * window_s)}s at concurrency {concurrency}",
+        ))
+
+    # Time to plateau: the first window whose throughput is within 10% of the best
+    # window seen. That is the number to quote for "how long until capacity arrives".
+    best = max((w.rps for w in windows), default=0.0)
+    plateau_at = None
+    for i, w in enumerate(windows):
+        if best and w.rps >= 0.9 * best:
+            plateau_at = int(i * window_s)
+            break
+    first = windows[0].rps if windows else 0.0
+    detail = {
+        "concurrency": concurrency,
+        "total_s": round(wall, 1),
+        "window_s": window_s,
+        "first_window_rps": first,
+        "best_window_rps": best,
+        "scale_up_factor": round(best / first, 2) if first else None,
+        "seconds_to_90pct_of_best": plateau_at,
+        "windows": [{"t_start_s": int(i * window_s), "rps": w.rps,
+                     "p50_ms": w.latency.get("p50_ms"), "p95_ms": w.latency.get("p95_ms"),
+                     "errors": w.errors}
+                    for i, w in enumerate(windows)],
+    }
+    return windows, detail

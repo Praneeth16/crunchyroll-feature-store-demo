@@ -34,7 +34,7 @@ discovered rather than hardcoded.
 | Element of the ask | Status | Evidence |
 |---|---|---|
 | **User** features | met | `viewer_features_current`, `recent_behavior_current` — both read by **both** rankers, unchanged, one pipeline |
-| **Title** features | **partial** | `title_features` is consumed directly by the horizontal ranker. The vertical ranker uses title content aggregated to rail grain, which is the correct shape for a rail-grain model — **but it reads the raw `titles` table, not the `title_features` feature table**, so that signal is shared at source-data level rather than through the feature store. `title_features` has a governed analogue for all four stats, so this is a fixable gap, not a design limit. See `vertical_ranking.md` §1 |
+| **Title** features | met | `title_features` is looked up directly by the horizontal ranker and **aggregated to rail grain** for the vertical one (`rail_avg_popularity`, `rail_avg_rating`, `rail_content_age_days`, `rail_simulcast_share`). A rail is not a title, so aggregation is the correct reuse shape. This read the raw `titles` table until an audit caught it — see `verification_log.md` V57 |
 | **Rail** features | met | `rail_features` (rail grain) and `viewer_rail_features_ts` (viewer × rail grain) |
 | **Contextual** features | met | 5 request-time UC Python UDFs, **2 of them shared** with the horizontal ranker |
 | Reused across both models | met | `notebooks/24` resolves the overlap from Unity Catalog at runtime and prints it — it cannot drift from this document |
@@ -126,6 +126,22 @@ rather than being design flaws.
 Honoured — 300 viewers, 132 titles, 363k rail impressions, generated in-pipeline. The POC
 says explicitly that the NDCG lift is evidence the pipeline works and **not** a forecast
 of Crunchyroll's lift.
+
+---
+
+## Added after the ask: the batch path
+
+Crunchyroll's November deliverable turned out to be **batch**, because Lakebase is not yet
+available in their region (GCP us-west1), with real-time as the end goal. That is not in
+the original document, so it is recorded here as an addition rather than an ask item.
+
+| Element | Status | Evidence |
+|---|---|---|
+| Batch scoring from the same feature store | met | `notebooks/26_batch_scoring.py`, `fe.score_batch` against the **offline** store — no online store involved |
+| Same model serves both paths | met | v10 `@champion` scored both ways; **16 of 16 collections at identical rank**, Spearman 1.0 |
+| Minutes-level refresh cadence | met, at demo scale | CDF-driven incremental mode; `make batch-incremental`. Unsized at their MAU |
+| What batch gives up | measured | **up to 9 of 16 collections** move across four contexts — personalization a precomputed table cannot deliver |
+| Migration path documented | met | `docs/batch_and_online.md` — what changes is one API call and where features are read from |
 
 ---
 

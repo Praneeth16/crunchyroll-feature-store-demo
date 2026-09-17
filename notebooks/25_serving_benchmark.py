@@ -44,12 +44,16 @@ cfg = Config.from_widgets(dbutils, extra_widgets={
     "bench_level_seconds": "12",
     "bench_spike_to": "48",
     "bench_rails_per_request": "12",
+    "bench_sustained_seconds": "600",     # 0 disables the sustained phase
+    "bench_sustained_concurrency": "32",
     "bench_write_table": "crfs_serving_benchmark",
     "run_id": "",
 })
 spark.sql(f"USE {cfg.fq}")
 print(cfg.describe())
 
+SUSTAINED_S = float(cfg.extras["bench_sustained_seconds"])
+SUSTAINED_C = int(cfg.extras["bench_sustained_concurrency"])
 LEVELS = tuple(int(x) for x in cfg.extras["bench_ramp_levels"].split(",") if x.strip())
 FANOUT = tuple(int(x) for x in cfg.extras["bench_fanout_sizes"].split(",") if x.strip())
 LEVEL_S = float(cfg.extras["bench_level_seconds"])
@@ -129,6 +133,37 @@ if warm["statuses"] != [200]:
 # COMMAND ----------
 fanout = LT.fanout_phase(client, payload_for, sizes=FANOUT, requests_per_size=40)
 print(LT.markdown_table(fanout))
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## Phase 1b · sustained load, to measure how long capacity takes to arrive
+# MAGIC
+# MAGIC The ramp gives each level 12 seconds. That measures a steady state at *current*
+# MAGIC capacity and is far too short to see capacity being added, which is why the
+# MAGIC 2.6x scale-up in this endpoint's throughput was originally found by accident --
+# MAGIC two ramp sweeps that happened to run ten minutes apart.
+# MAGIC
+# MAGIC This holds one concurrency level for ten minutes and reports throughput per
+# MAGIC 30-second window. The output is the number capacity planning actually needs:
+# MAGIC **how long after load arrives does throughput stop climbing.**
+# MAGIC
+# MAGIC It runs BEFORE the ramp and the spike, deliberately. The first version ran after
+# MAGIC them and reported `scale_up_factor 1.0` from its very first window -- which reads
+# MAGIC as "this endpoint never scales" and actually meant "the spike had already scaled
+# MAGIC it". A phase measuring time-to-capacity has to be the first load the endpoint
+# MAGIC sees in the run, or it measures nothing.
+# COMMAND ----------
+sustained, sustained_detail = [], {}
+if SUSTAINED_S > 0:
+    sustained, sustained_detail = LT.sustained_phase(
+        client, payloads[0], concurrency=SUSTAINED_C,
+        total_s=SUSTAINED_S, window_s=30.0)
+    print(LT.markdown_table(sustained))
+    print(f"\nfirst 30s window: {sustained_detail.get('first_window_rps')} req/s")
+    print(f"best window:      {sustained_detail.get('best_window_rps')} req/s")
+    print(f"scale-up factor:  {sustained_detail.get('scale_up_factor')}x")
+    print(f"seconds to reach 90% of best: {sustained_detail.get('seconds_to_90pct_of_best')}")
+else:
+    print("sustained phase disabled (bench_sustained_seconds=0)")
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## Phase 2 · concurrency ramp
@@ -223,7 +258,7 @@ else:
 # MAGIC client was. The dashboard reads this table, and a rerun after a config change
 # MAGIC is a comparison rather than a replacement.
 # COMMAND ----------
-all_results = list(fanout) + list(ramp) + list(spike) + list(features_only)
+all_results = list(fanout) + list(ramp) + list(sustained) + list(spike) + list(features_only)
 rows = []
 for r in all_results:
     d = r.as_dict()
@@ -301,6 +336,28 @@ md = [
     "",
     LT.markdown_table(ramp),
     "",
+    "## Sustained load — how long capacity takes to arrive",
+    "",
+    "The ramp above gives each level 12 seconds, which measures a steady state at "
+    "current capacity and cannot see capacity being added. This phase holds one level "
+    "and slices by wall-clock window.",
+    "",
+    (LT.markdown_table(sustained) if sustained
+     else "_Sustained phase disabled for this run._"),
+    "",
+] + ([
+    f"- concurrency held: **{sustained_detail.get('concurrency')}** for "
+    f"{sustained_detail.get('total_s')}s",
+    f"- first 30s window: **{sustained_detail.get('first_window_rps')} req/s**",
+    f"- best window: **{sustained_detail.get('best_window_rps')} req/s**",
+    f"- scale-up factor: **{sustained_detail.get('scale_up_factor')}x**",
+    f"- seconds to reach 90% of best throughput: "
+    f"**{sustained_detail.get('seconds_to_90pct_of_best')}**",
+    "",
+    "This is the number to size against: `min_provisioned_concurrency` is what you get "
+    "immediately, `max` is what you get after this long.",
+    "",
+] if sustained_detail else []) + [
     "## Traffic spike",
     "",
     LT.markdown_table(spike),
@@ -405,6 +462,8 @@ dbutils.notebook.exit(json.dumps({
     "spike": [r.as_dict() for r in spike],
     "spike_detail": {k: v for k, v in spike_detail.items() if k != "per_second"},
     "features_only": [r.as_dict() for r in features_only],
+    "sustained": [r.as_dict() for r in sustained],
+    "sustained_detail": sustained_detail,
     "server_side": server_side,
     "online_store_direct": store_latency,
     "report_path": out_path,

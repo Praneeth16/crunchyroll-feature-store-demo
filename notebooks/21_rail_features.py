@@ -12,8 +12,7 @@
 # MAGIC | `viewer_features_current` | viewer_id | latest | **yes** | **yes — unchanged** |
 # MAGIC | `recent_behavior_current` | viewer_id | triggered | **yes** | **yes — unchanged** |
 # MAGIC | `session_features_current` | viewer_id | streaming | **yes (CONTINUOUS)** | **yes — unchanged** |
-# MAGIC | `title_features` | title_id | daily | **yes** | horizontal ranker only |
-# MAGIC | `titles` (raw) | title_id | n/a | source table | feeds the rail content stats below |
+# MAGIC | `title_features` | title_id | daily | **yes** | **yes — aggregated into the rail content stats** |
 # MAGIC | `rail_features` | rail_id | daily | **yes** | new |
 # MAGIC | `viewer_rail_features_ts` | viewer_id + rail_id (+ ts) | daily snapshots | **yes — latest per key** | new |
 # MAGIC
@@ -85,7 +84,10 @@ print("computing rail features as of:", AS_OF)
 # after the feature tables had already been written.
 rails_pdf = spark.table(cfg.t("rails")).toPandas()
 rail_titles_pdf = spark.table(cfg.t("rail_title_map")).toPandas()
-titles_pdf = spark.table(cfg.t("titles")).toPandas()
+# The feature table, not the raw `titles` table: the rail content stats below are
+# aggregates of governed title features, which is what makes the reuse real rather
+# than nominal (verification_log V57).
+title_features_pdf = spark.table(cfg.t("title_features")).toPandas()
 n_impressions = spark.table(cfg.t("rail_impressions")).count()
 print(f"rails {len(rails_pdf)} | impressions {n_impressions:,} (aggregated in Spark)")
 # COMMAND ----------
@@ -104,8 +106,8 @@ audience = R.rail_audience(spark, cfg.t("rail_impressions"), AS_OF)
 print("last-30-day audience per rail, aggregated in Spark:")
 print(audience.sort_values("rail_impressions_30d", ascending=False).to_string(index=False))
 
-rail_features = R.build_rail_features(rails_pdf, rail_titles_pdf, titles_pdf,
-                                      audience, AS_OF)
+rail_features = R.build_rail_features(rails_pdf, rail_titles_pdf, title_features_pdf,
+                                      audience)
 print("rail_features:", rail_features.shape)
 display(spark.createDataFrame(rail_features))
 # COMMAND ----------

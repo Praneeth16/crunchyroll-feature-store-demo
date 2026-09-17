@@ -95,7 +95,7 @@ consistency.
 | `viewer_features_current` | viewer | ✅ | ✅ | ✅ |
 | `recent_behavior_current` | viewer | ✅ | ✅ | ✅ |
 | `session_features_current` | viewer | available | ✅ | ✅ CONTINUOUS |
-| `title_features` | title | — (see note) | ✅ | ✅ |
+| `title_features` | title | ✅ aggregated to rail grain | ✅ | ✅ |
 | `viewer_embedding_current` | viewer | available | retriever | ✅ |
 | `rail_features` | rail | ✅ | — | ✅ |
 | `viewer_rail_features_ts` | viewer × rail | ✅ | — | ✅ latest per key |
@@ -105,23 +105,32 @@ consistency.
 | `cr_rail_click_recency` (UDF) | request | ✅ | — | request-time |
 | `cr_device_rail_fit` (UDF) | request | ✅ | — | request-time |
 
-**One row of that table needs a caveat, because it is the weakest link in the sharing
-story.** The vertical ranker's four rail content stats — `rail_avg_popularity`,
-`rail_avg_rating`, `rail_content_age_days`, `rail_simulcast_share` — are computed from
-the **raw `titles` Delta table**, not from the `title_features` feature table. Two of
-their source columns (`intrinsic_popularity`, `release_year`) exist only there.
+**One row of that table was a caveat until recently, and the fix is worth describing
+because it is the difference between real reuse and nominal reuse.** The vertical
+ranker's four rail content stats — `rail_avg_popularity`, `rail_avg_rating`,
+`rail_content_age_days`, `rail_simulcast_share` — were originally computed from the
+**raw `titles` Delta table**. Title signal was therefore shared at source-data level,
+not through the feature store, which is materially weaker: those stats inherited none of
+the feature table's definitions, and `rail_content_age_days` recomputed content age from
+`release_year` against a July-1 approximation while `title_features.days_since_release`
+already defined it. Two definitions of one concept is the drift this architecture exists
+to remove.
 
-So title signal is shared at the **source-data** level, not at the feature-table level,
-and that is a real difference: it means those four stats do not inherit the feature
-table's definitions, and `rail_content_age_days` recomputes from `release_year` what
-`title_features.days_since_release` already defines. Two definitions of one concept is
-exactly the drift this architecture is supposed to remove.
+They now aggregate `title_features` — the same table the watch-next ranker looks up. Two
+further improvements fell out of it:
 
-`title_features` carries a governed analogue for all four (`popularity_30d`,
-`avg_rating`, `days_since_release`, `is_simulcast`), so this is a fixable gap rather
-than a design limit — sourcing the rail content stats from the feature table would make
-the reuse real. It is called out here rather than glossed because an earlier version of
-this document claimed `title_features` fed these stats, and it does not.
+* `rail_avg_popularity` now averages the observed `popularity_30d` instead of the
+  generator's latent `intrinsic_popularity`. That removes a mild **leakage**: intrinsic
+  popularity is a parameter that produced the engagement the model is trained to predict.
+  Both columns are on a 0–1 scale, so the change moves the values without changing the
+  feature's range.
+* `avg_rating` and `is_simulcast` come from the table the other ranker reads, so the two
+  models cannot disagree about what those mean.
+
+This is recorded rather than quietly fixed because an earlier version of this document
+claimed `title_features` fed these stats when it did not (`verification_log.md` V57). A
+rail is still not a title, so aggregating to rail grain remains the correct shape — the
+change is *where the title values come from*, not what grain they are used at.
 
 Adding a whole second ranking model at a different grain cost **two feature tables
 and three UDFs**. Nothing was forked, nothing was copied, and neither model owns a
@@ -548,6 +557,24 @@ layer.** Going from 12 rails to 30 costs no latency, only a slightly larger resp
 happens. The test ran and the serial model was simply wrong: the slope is zero.
 
 ### Throughput is not a single number, and this is the most important finding here
+
+**Corrected after a deliberate measurement.** A ten-minute sustained-load phase was added
+specifically to measure how long capacity takes to arrive, and it reported no scale-up at
+all — flat ~200 req/s from its first 30-second window. That was a measurement artifact:
+the phase ran *after* the spike, so the endpoint was already at full capacity before it
+started. What the same run does show, at the **same** concurrency 32:
+
+| regime | throughput | p50 | 429s |
+|---|---|---|---|
+| ramp (early in the run) | 77.5 req/s | 369 ms | none |
+| sustained (after the spike) | ~200 req/s | 71 ms | ~12,000 per 30 s |
+
+Both are real and they are different *modes*, not different capacities: early on the
+endpoint queues excess load, and once pushed it sheds it with 429s instead. Shedding
+gives higher successful throughput **and** lower latency for the requests that get
+through. The phase has been moved ahead of the ramp so a future run measures capacity
+arriving rather than capacity already arrived; until then, treat "how long does scale-up
+take" as **not yet cleanly measured**, and see `verification_log.md` V50 and V59.
 
 An earlier version of this document reported a **"~212 req/s ceiling, reached at
 concurrency 16"**. That number is real but it was **half of the evidence**, and reporting

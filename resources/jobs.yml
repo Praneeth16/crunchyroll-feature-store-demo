@@ -213,9 +213,10 @@ resources:
       name: crfs_benchmark
       description: >-
         Measure the rail-ranking endpoint under load from inside the workspace
-        region: fanout against candidates per request, a concurrency ramp, a traffic
-        spike, the same fanout against Feature Serving for attribution, and
-        server-side execution_time_ms from the inference table.
+        region: fanout against candidates per request, a concurrency ramp, ten minutes
+        of sustained load to measure how long autoscaling takes to add capacity, a
+        traffic spike, the same fanout against Feature Serving for attribution, and
+        server-side execution_duration_ms from the inference table.
       max_concurrent_runs: 1
       tags:
         demo: crunchyroll-feature-store
@@ -231,9 +232,39 @@ resources:
               bench_level_seconds: "12"
               bench_spike_to: "48"
               bench_rails_per_request: "12"
+              # Ten minutes at one level. The ramp's 12s levels cannot observe capacity
+              # arriving -- this is the phase that measures it.
+              bench_sustained_seconds: "600"
+              bench_sustained_concurrency: "32"
               # Supported way to get the run id into a notebook. Reading it from the
               # command context is blocked on serverless compute.
               run_id: "{{job.run_id}}"
+          # Raised from 3600: the sustained phase adds ten minutes of wall time on top
+          # of the ramp, spike and both fanout sweeps.
+          timeout_seconds: 5400
+
+    crfs_batch:
+      name: crfs_batch
+      description: >-
+        The batch (offline) scoring path: fe.score_batch against the offline feature
+        store, ranked per viewer, written to a precomputed collection-order table. Needs
+        no online store, which is what makes it deliverable where Lakebase is not yet
+        available. Also compares its output against the live endpoint to show the two
+        agree, and measures what a batch table cannot do -- request-time context.
+      max_concurrent_runs: 1
+      tags:
+        demo: crunchyroll-feature-store
+        layer: batch
+      tasks:
+        - task_key: batch_score
+          notebook_task:
+            notebook_path: ../notebooks/26_batch_scoring.py
+            base_parameters:
+              <<: *common_params
+              batch_mode: "full"
+              batch_device: "tv"
+              batch_hour: "21"
+              batch_output: "rail_rankings_batch"
           timeout_seconds: 3600
 
     # ---------------------------------------------------------------- satellites

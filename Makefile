@@ -23,7 +23,7 @@ VARS    := $(shell test -f .crfs.vars && grep -v '^\#' .crfs.vars | grep -v '^CR
 FLAGS    = -t $(TARGET) --profile $(PROFILE) $(VARS)
 
 .DEFAULT_GOAL := help
-.PHONY: help up bootstrap render preflight validate deploy deploy-app demo vertical bench bench-local \
+.PHONY: help up bootstrap render preflight validate deploy deploy-app demo vertical batch batch-incremental bench bench-local \
         bench-pull streaming burst agent app-logs app-url cost verify teardown-cost teardown \
         destroy fmt
 
@@ -72,6 +72,12 @@ demo: deploy ## Horizontal ranking: the shared feature layer and the watch-next 
 
 vertical: deploy ## Vertical ranking: rails, rail features, rail ranker, request-path endpoint (~15 min)
 	$(BUNDLE) run crfs_vertical $(FLAGS)
+
+batch: deploy ## The offline path: score every viewer with score_batch, no online store
+	$(BUNDLE) run crfs_batch $(FLAGS)
+
+batch-incremental: deploy ## Rescore only viewers whose features changed (CDF-driven)
+	$(BUNDLE) run crfs_batch $(FLAGS) --batch_mode incremental
 
 bench: deploy ## Measure the rail endpoint under load from inside the region
 	$(BUNDLE) run crfs_benchmark $(FLAGS)
