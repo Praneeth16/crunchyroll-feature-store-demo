@@ -12,7 +12,8 @@
 # MAGIC | `viewer_features_current` | viewer_id | latest | **yes** | **yes — unchanged** |
 # MAGIC | `recent_behavior_current` | viewer_id | triggered | **yes** | **yes — unchanged** |
 # MAGIC | `session_features_current` | viewer_id | streaming | **yes (CONTINUOUS)** | **yes — unchanged** |
-# MAGIC | `title_features` | title_id | daily | **yes** | **yes — feeds rail content stats** |
+# MAGIC | `title_features` | title_id | daily | **yes** | horizontal ranker only |
+# MAGIC | `titles` (raw) | title_id | n/a | source table | feeds the rail content stats below |
 # MAGIC | `rail_features` | rail_id | daily | **yes** | new |
 # MAGIC | `viewer_rail_features_ts` | viewer_id + rail_id (+ ts) | daily snapshots | **yes — latest per key** | new |
 # MAGIC

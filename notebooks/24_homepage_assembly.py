@@ -30,6 +30,7 @@ if _root not in sys.path:
     sys.path.insert(0, _root)
 
 from src.crfs.config import Config
+from src.crfs import config as C_CFG
 from src.crfs import rails as R
 from src.crfs import candidates as C
 
@@ -66,15 +67,10 @@ online_tables = spark.sql(f"""
     SHOW TABLES IN {cfg.fq} LIKE 'online_*'
 """).toPandas()["tableName"].tolist()
 
-READERS = {
-    "online_viewer_features":  ["watch-next (horizontal)", "rail ranker (vertical)"],
-    "online_recent_behavior":  ["watch-next (horizontal)", "rail ranker (vertical)"],
-    "online_title_features":   ["watch-next (horizontal)"],
-    "online_session_features": ["streaming freshness path"],
-    "online_viewer_embedding": ["retriever"],
-    "online_rail_features":    ["rail ranker (vertical)"],
-    "online_viewer_rail":      ["rail ranker (vertical)"],
-}
+# Derived from the FeatureLookup declarations the two trainers use (src/crfs/config.py),
+# not typed again here. The previous version kept a parallel dict in this notebook that
+# could disagree with the models without anyone noticing.
+READERS = C_CFG.online_readers()
 rows = []
 for t in sorted(online_tables):
     n = spark.table(cfg.t(t)).count()
@@ -86,6 +82,10 @@ print(overlap.to_string(index=False))
 shared_n = int((overlap["shared"] == "YES").sum())
 print(f"\n{shared_n} of {len(overlap)} published online tables are read by both rankers. "
       f"Neither model owns a private copy of a viewer feature.")
+print("Table list resolved from Unity Catalog (SHOW TABLES); the reader mapping is "
+      "derived from the FeatureLookup declarations in src/crfs/config.py, which is what "
+      "notebooks 02 and 22 train against -- not from the deployed models' own feature "
+      "specs, so it can drift if someone retrains with different lookups.")
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## Step 1 · Vertical — which rails, in what order
@@ -238,7 +238,7 @@ if moved_any == 0:
 # MAGIC %md
 # MAGIC ## What the request actually carried
 # MAGIC
-# MAGIC Seven fields. Every feature the model scored on -- 47 of them, across four
+# MAGIC Seven fields. Every feature value the endpoint resolved -- 45 of them, across four
 # MAGIC tables and five UDFs -- was retrieved by the endpoint, not sent by the caller.
 # MAGIC That is the property that makes training-serving consistency structural instead
 # MAGIC of a code-review rule.

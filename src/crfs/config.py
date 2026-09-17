@@ -124,3 +124,57 @@ class Config:
                       "retriever_endpoint", "feature_endpoint", "agent_endpoint",
                       "llm_endpoint", "warehouse_id")
         ) + f"\n  {'end_date_resolved':20s} {self.end_date_resolved}"
+
+
+# ---------------------------------------------------------------- feature-table registry
+# Which feature tables each model looks up, as ONE declaration the trainers and the
+# reporting notebook both read.
+#
+# Notebook 24's sharing table used to carry its own hand-typed dict of who-reads-what,
+# while the document claimed the overlap was "resolved from Unity Catalog ... so it
+# cannot drift from reality". Only the table LIST was resolved (`SHOW TABLES LIKE
+# 'online_*'`); the mapping that actually constitutes the sharing claim was typed by
+# hand in a reporting notebook and could disagree with the models silently.
+#
+# These lists mirror the FeatureLookup declarations in notebooks 02 and 22. That is a
+# code declaration, not the deployed model's own feature spec, so it can still drift if
+# someone retrains with different lookups and does not update it -- notebook 24 says
+# which source it used rather than implying more authority than it has.
+HORIZONTAL_FEATURE_TABLES = [
+    "viewer_features_current",
+    "recent_behavior_current",
+    "title_features",
+]
+VERTICAL_FEATURE_TABLES = [
+    "viewer_features_current",
+    "recent_behavior_current",
+    "rail_features",
+    "viewer_rail_features_ts",
+]
+# Published online but read by neither ranker: the retriever's embedding and the
+# streaming freshness path.
+OTHER_ONLINE_READERS = {
+    "viewer_embedding_current": "retriever",
+    "session_features_current": "streaming freshness path",
+}
+
+
+def online_readers() -> dict:
+    """{online_table_name: [reader, ...]} derived from the lookup declarations above.
+
+    Keyed by the PUBLISHED table name, which is the offline name prefixed with
+    `online_` and, for the time series table, shortened -- `viewer_rail_features_ts`
+    publishes to `online_viewer_rail`.
+    """
+    published = {"viewer_rail_features_ts": "online_viewer_rail"}
+    def pub(t):
+        return published.get(t, f"online_{t.replace('_current', '')}")
+
+    out = {}
+    for t in HORIZONTAL_FEATURE_TABLES:
+        out.setdefault(pub(t), []).append("watch-next (horizontal)")
+    for t in VERTICAL_FEATURE_TABLES:
+        out.setdefault(pub(t), []).append("rail ranker (vertical)")
+    for t, reader in OTHER_ONLINE_READERS.items():
+        out.setdefault(pub(t), []).append(reader)
+    return out

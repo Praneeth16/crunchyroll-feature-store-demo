@@ -34,7 +34,7 @@ discovered rather than hardcoded.
 | Element of the ask | Status | Evidence |
 |---|---|---|
 | **User** features | met | `viewer_features_current`, `recent_behavior_current` — both read by **both** rankers, unchanged, one pipeline |
-| **Title** features | met, indirectly for vertical | `title_features` is consumed directly by the horizontal ranker; the vertical ranker consumes title content **aggregated to rail grain** via `rail_title_map` → `rail_features`. A rail is not a title, so this is the correct reuse shape, not a gap |
+| **Title** features | **partial** | `title_features` is consumed directly by the horizontal ranker. The vertical ranker uses title content aggregated to rail grain, which is the correct shape for a rail-grain model — **but it reads the raw `titles` table, not the `title_features` feature table**, so that signal is shared at source-data level rather than through the feature store. `title_features` has a governed analogue for all four stats, so this is a fixable gap, not a design limit. See `vertical_ranking.md` §1 |
 | **Rail** features | met | `rail_features` (rail grain) and `viewer_rail_features_ts` (viewer × rail grain) |
 | **Contextual** features | met | 5 request-time UC Python UDFs, **2 of them shared** with the horizontal ranker |
 | Reused across both models | met | `notebooks/24` resolves the overlap from Unity Catalog at runtime and prints it — it cannot drift from this document |
@@ -74,7 +74,7 @@ UDFs.** Nothing forked, nothing copied, no private per-model copy of a viewer fe
 | Takes context | met | `device`, `locale`, `hour_of_day`, `day_of_week`, `request_epoch_s` |
 | Takes eligible rails | met | one row per candidate rail; eligibility is a **hard filter applied before scoring**, never a feature |
 | Returns personalized rankings | met | `rail_id` / `engagement_probability` / `rail_rank`, ranked within `viewer_id` |
-| **How online features are retrieved** | met | the endpoint does it, not the caller: **7 request fields in, 47 features looked up internally** across 4 tables and 5 UDFs |
+| **How online features are retrieved** | met | the endpoint does it, not the caller: **7 request fields in, 45 feature values resolved server-side** across 4 tables and 5 UDFs (the model scores on 47 features: 43 of those retrieved values plus the 4 context fields the caller sends) |
 | Context actually changes the answer | met | notebook 24 scores the same viewer at 09:00/21:00 × TV/mobile; **9 of 15 rails move** between contexts with nothing in the feature store changing. A zero would fail the run loudly |
 | Personalization is the source of the lift | met | ablation removing all 13 rail-identity features loses nothing (NDCG@5 0.7140 → 0.7169), across two independent runs |
 

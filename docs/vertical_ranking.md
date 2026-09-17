@@ -95,7 +95,7 @@ consistency.
 | `viewer_features_current` | viewer | ✅ | ✅ | ✅ |
 | `recent_behavior_current` | viewer | ✅ | ✅ | ✅ |
 | `session_features_current` | viewer | available | ✅ | ✅ CONTINUOUS |
-| `title_features` | title | via rail content stats | ✅ | ✅ |
+| `title_features` | title | — (see note) | ✅ | ✅ |
 | `viewer_embedding_current` | viewer | available | retriever | ✅ |
 | `rail_features` | rail | ✅ | — | ✅ |
 | `viewer_rail_features_ts` | viewer × rail | ✅ | — | ✅ latest per key |
@@ -105,10 +105,41 @@ consistency.
 | `cr_rail_click_recency` (UDF) | request | ✅ | — | request-time |
 | `cr_device_rail_fit` (UDF) | request | ✅ | — | request-time |
 
+**One row of that table needs a caveat, because it is the weakest link in the sharing
+story.** The vertical ranker's four rail content stats — `rail_avg_popularity`,
+`rail_avg_rating`, `rail_content_age_days`, `rail_simulcast_share` — are computed from
+the **raw `titles` Delta table**, not from the `title_features` feature table. Two of
+their source columns (`intrinsic_popularity`, `release_year`) exist only there.
+
+So title signal is shared at the **source-data** level, not at the feature-table level,
+and that is a real difference: it means those four stats do not inherit the feature
+table's definitions, and `rail_content_age_days` recomputes from `release_year` what
+`title_features.days_since_release` already defines. Two definitions of one concept is
+exactly the drift this architecture is supposed to remove.
+
+`title_features` carries a governed analogue for all four (`popularity_30d`,
+`avg_rating`, `days_since_release`, `is_simulcast`), so this is a fixable gap rather
+than a design limit — sourcing the rail content stats from the feature table would make
+the reuse real. It is called out here rather than glossed because an earlier version of
+this document claimed `title_features` fed these stats, and it does not.
+
 Adding a whole second ranking model at a different grain cost **two feature tables
 and three UDFs**. Nothing was forked, nothing was copied, and neither model owns a
-private version of a viewer feature. Notebook 24 prints this overlap resolved from
-Unity Catalog rather than from this table, so it cannot drift from reality.
+private version of a viewer feature.
+
+Notebook 24 prints this overlap at runtime: the **table list** comes from Unity Catalog
+(`SHOW TABLES LIKE 'online_*'`) and the **reader mapping** is derived from the
+`FeatureLookup` declarations in `src/crfs/config.py` — the same declarations notebooks 02
+and 22 train against. Measured there: **2 of 7** published online tables are read by both
+rankers.
+
+An earlier version of this document said that overlap was "resolved from Unity Catalog …
+so it cannot drift from reality". That was an overstatement worth correcting: only the
+table list was resolved, while the mapping that constitutes the sharing claim was a
+hand-typed dict inside the reporting notebook. It is now derived from one declaration
+instead of two, which removes the drift between the notebook and the trainers — but it is
+still a code declaration, **not** the deployed models' own feature specs, so it can drift
+if someone retrains with different lookups. The notebook prints which source it used.
 
 ### Contextual features: the part that is easy to get wrong
 
@@ -144,6 +175,15 @@ Three mechanisms, in increasing order of strength:
    feature values** are resolved server-side (15 viewer + 5 recent-behaviour + 13
    rail + 7 viewer×rail + 5 request-time UDF outputs). A caller cannot send the
    wrong feature because a caller does not send features.
+
+   Two counts appear in this repo and they are **not** the same number, so both are
+   reconciled here once: **45** is what the endpoint retrieves or computes, while
+   **47** is what the model scores on. The difference is that two retrieved values
+   are deliberately not features (`last_event_epoch_s` and `vr_last_click_epoch_s`
+   are UDF inputs only, so 43 of the 45 are used) and four features are carried on
+   the request rather than looked up (`device`, `locale`, `hour_of_day`,
+   `day_of_week`). 43 + 4 = 47. An earlier edit in this project substituted one
+   count for the other across three files; both are correct for their own question.
 
 3. **One table for offline and online.** `viewer_rail_features_ts` is a time series
    feature table. Offline it holds every daily snapshot and the training join is

@@ -386,7 +386,7 @@ if not ranked_rails.empty:
                 dt.datetime.fromtimestamp(request_epoch_s).weekday()),
             "request_epoch_s": int(request_epoch_s),
         }, indent=2), language="json")
-        st.caption("Seven fields. The 47 feature values the model scored on came from "
+        st.caption("Seven fields. The 45 feature values resolved server-side came from "
                    "four feature tables and five UC Python UDFs, all resolved inside "
                    "the endpoint.")
 
