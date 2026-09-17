@@ -221,7 +221,9 @@ class CrunchyrollRetriever(mlflow.pyfunc.PythonModel):
         """Input: {"viewer_id": str, "top_k": int}
         Output: [{"title_id": str, "retrieval_score": float}, ...]
         """
+        import json
         import numpy as np
+        import pandas as pd
         results = []
 
         for _, row in model_input.iterrows():
@@ -265,8 +267,7 @@ class CrunchyrollRetriever(mlflow.pyfunc.PythonModel):
         # two models in this repo that register cleanly return a float array (notebook
         # 02) and a DataFrame (notebook 22); a DataFrame gives an explicit named column,
         # so that is what this returns.
-        import pandas as _pd
-        return _pd.DataFrame({"candidates": results})
+        return pd.DataFrame({"candidates": results})
 
 # Save artifacts
 # A writable directory the driver actually owns. /tmp is not reliably writable on
@@ -359,7 +360,17 @@ from pyspark.sql import functions as SF
 spec_df = (spark.table(cfg.t("viewer_embedding_current"))
            .select("viewer_id")
            .limit(100)
-           .withColumn("top_k", SF.lit(60).cast("int")))
+           .withColumn("top_k", SF.lit(60).cast("bigint")))
+# bigint, not int. This one cast decides whether the endpoint can be called at all.
+# `cast("int")` is int32, so the derived signature enforced `top_k: integer`, while a
+# JSON request integer arrives as int64 -- and MLflow refuses to narrow:
+#   MlflowException: Incompatible input types for column top_k.
+#                    Can not safely convert int64 to int32.
+# which Model Serving then reports as the information-free `Error ''`. Exactly the same
+# failure mode as vr_last_click_epoch_s on the rail ranker (verification_log V30/V37):
+# an integral width mismatch between the training frame and the request, invisible until
+# a live query. The rule that came out of that one applies here: keep request-carried
+# numerics at their widest type end to end rather than matching them narrowly.
 
 # viewer_id must STAY in the training set. It is the lookup key, but it is also what
 # predict() reads to pick the viewer's factors -- and fe.log_model infers the output
@@ -466,7 +477,9 @@ with mlflow.start_run(run_name="crunchyroll_retriever") as run:
             info = fe.log_model(**log_kwargs)
             uri = getattr(info, "model_uri", None) or f"runs:/{run.info.run_id}/cr_retriever"
             sig = ModelSignature(
-                inputs=Schema([ColSpec("string", "viewer_id"), ColSpec("long", "top_k")]),
+                inputs=Schema(
+                    [ColSpec("string", "viewer_id"), ColSpec("long", "top_k")]
+                    + [ColSpec("double", f"vf_{j}", required=False) for j in range(8)]),
                 outputs=Schema([ColSpec("string", "candidates")]),
             )
             set_signature(uri, sig)

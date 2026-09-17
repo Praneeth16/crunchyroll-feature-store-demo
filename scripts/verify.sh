@@ -54,6 +54,28 @@ for ep in crunchyroll-watch-next-ranker crunchyroll-viewer-features crunchyroll-
   [ "$s" = "READY" ] && ok "endpoint $ep READY" || bad "endpoint $ep: ${s:-missing}"
 done
 
+# READY is not the same as working. The retriever endpoint reported READY while every
+# query to it failed with `Error ''` (a NameError inside the model, invisible from the
+# endpoint state), and this script passed it -- so a green verify certified a
+# non-functional endpoint. Each request-path endpoint now gets one real query.
+echo
+echo "endpoints answer a real request"
+query_endpoint() {
+  local ep="$1" payload="$2"
+  out=$("$DB" api post "/serving-endpoints/$ep/invocations" --profile "$PROFILE" \
+        --json "$payload" 2>&1)
+  if printf '%s' "$out" | grep -qE '"(predictions|outputs)"'; then
+    ok "$ep answered"
+  else
+    bad "$ep is READY but does not answer: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-180)"
+  fi
+}
+query_endpoint crunchyroll-candidate-retriever \
+  '{"dataframe_records":[{"viewer_id":"v0001","top_k":10}]}'
+RAIL_EP_Q="${RAIL_EP:-crunchyroll-rail-ranker}"
+query_endpoint "$RAIL_EP_Q" \
+  '{"dataframe_records":[{"viewer_id":"v0001","rail_id":"r_trending","device":"tv","locale":"en-US","hour_of_day":21,"day_of_week":5,"request_epoch_s":1788210000}]}'
+
 # ---------------------------------------------------------------- vertical path
 echo
 echo "vertical (rail) ranking"
