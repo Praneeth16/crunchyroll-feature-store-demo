@@ -165,6 +165,49 @@ fe.log_model(model=GpuRailRanker(), flavor=mlflow.pyfunc,
 * Notebook 32 §7 scores the same rows through both models with `fe.score_batch` and
   reports the rank correlation. Neither call supplies a feature value.
 
+## Measured: the GPU is not the bottleneck, the feature join is
+
+From the run that produced model version 5 (`732810502ad94478a90822972e55b4de`):
+
+| | |
+|---|---|
+| device | NVIDIA A10G, CUDA |
+| **training** | **11.9 seconds** — 8 epochs, 73,292 rows, 44 features |
+| whole job | **38 minutes** |
+| holdout AUC | 0.7319 |
+
+Training is **0.5% of the job**. Everything else is the point-in-time join: four as-of
+lookups across `viewer_features_ts`, `recent_behavior_ts`, `rail_features_ts` and
+`viewer_rail_features_ts`, plus the export to Parquet.
+
+The practical consequence for Crunchyroll, and it is the opposite of where attention usually
+goes: **at this data size an accelerator is not what makes training feasible.** What made
+the sklearn path fail was `toPandas()` on the full join, and what costs 38 minutes here is
+the join itself. Scale the join before scaling the estimator — and if a bigger model is the
+goal, the GPU has enormous headroom, because twelve seconds of an A10 is nothing.
+
+## A torch model logged with fe.log_model cannot be scored off-endpoint on serverless
+
+Two dead ends, both measured, and together they are worth knowing before planning a batch
+path for a deep model:
+
+```
+fe.score_batch(...)                       ModuleNotFoundError: No module named 'torch'
+                                          (in the Spark worker, as a PythonException)
+fe.score_batch(..., env_manager=...)      did not resolve it on this workspace
+mlflow.pyfunc.load_model(...).predict(..) ValueError: score_batch with local_uri is not
+                                          supported on serverless runtime.
+                                          Use model_uri instead.
+```
+
+So on serverless the only way to run this model is **a serving endpoint**, where Model
+Serving builds the model's own environment at deploy time. Notebook 32 reports this as a
+limitation rather than failing the job, and the model is still registered, tagged and
+aliased `@challenger` — deployable by the same notebook 23 path as the sklearn ranker.
+
+The sklearn rail ranker has none of this trouble because scikit-learn is already in the
+worker, which is exactly why the constraint is invisible until a torch model appears.
+
 ## Scoring a torch model through Spark needs its environment restored
 
 `fe.score_batch` evaluates a model inside a Spark UDF, and the executor environment is

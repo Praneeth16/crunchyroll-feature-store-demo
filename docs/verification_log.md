@@ -847,3 +847,36 @@ requires one online destination per offline group. And `train_streaming` treated
 Parquet batch order as chronological -- Spark does not promise it -- so it now verifies the
 batches are ordered by the timestamp column and refuses rather than reporting an arbitrary
 holdout as temporal.
+
+### V88 · GPU training works, and the measurement points somewhere unexpected
+
+`crfs_gpu_train` on the corrected training set, model version 5, run
+`732810502ad94478a90822972e55b4de`:
+
+| | |
+|---|---|
+| device | NVIDIA A10G, CUDA |
+| **training time** | **11.9 seconds** (8 epochs, 73,292 rows, 44 features) |
+| **whole job** | **38 minutes** |
+| holdout AUC | 0.7319 |
+
+**Training is half a percent of the job.** The rest is the point-in-time join -- four as-of
+lookups now -- plus the Parquet export. The estimator substitution that `open_items.md` §4
+asked for is proven, and the same measurement says an accelerator is not what makes training
+feasible at this size: `toPandas()` on the full join was the original failure, and the join
+itself is what costs 38 minutes. Scale the join before the estimator.
+
+**Two dead ends for scoring it off-endpoint on serverless**, both measured:
+
+```
+fe.score_batch(...)                        ModuleNotFoundError: No module named 'torch'
+fe.score_batch(..., env_manager=virtualenv) did not resolve it on this workspace
+mlflow.pyfunc.load_model(...).predict(...)  ValueError: score_batch with local_uri is not
+                                            supported on serverless runtime.
+```
+
+So a `fe.log_model`-ed torch model can only be run through **a serving endpoint** here,
+where Model Serving builds the environment at deploy. Notebook 32 reports this rather than
+failing, having previously failed the whole 76-minute job over an optional comparison. The
+sklearn ranker is unaffected because scikit-learn is already in the worker, which is why the
+constraint stays invisible until a deep model appears.
