@@ -153,7 +153,13 @@ fi
 # ------------------------------------------------------------------------- app
 if want app && [ "$SKIP_APP" != "1" ]; then
   step "6/8  Deploying the app"
-  ./scripts/deploy_app.sh "$PROFILE" || die "deploy_app"
+  # The app is a bundle resource, so `bundle deploy` (stage 2) already created or
+  # updated it and this pushes its source. An app that predates the bundle has to be
+  # adopted once with `databricks bundle deployment bind crfs_watch_next <app-name>`.
+  "$DB" bundle run crfs_watch_next "${BUNDLE[@]}" || die "app deploy"
+  ./scripts/grant_app_postgres.sh "$PROFILE" || note "postgres grants failed; the app falls back to Feature Serving"
+  ./scripts/grant_app_endpoints.sh "$PROFILE" || note "endpoint grants incomplete; endpoints created later need a re-run"
+  ./scripts/grant_app_uc.sh "$PROFILE" || note "UC grants failed; every Delta-backed panel will come back empty"
 fi
 
 # ----------------------------------------------------------------- benchmark

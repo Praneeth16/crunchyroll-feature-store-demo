@@ -16,7 +16,7 @@ ENDPOINTS="${ENDPOINTS:-crunchyroll-rail-ranker crunchyroll-candidate-retriever 
 DB=$(command -v databricks || echo /opt/homebrew/bin/databricks)
 
 SP=$("$DB" apps get "$APP" --profile "$PROFILE" -o json 2>/dev/null \
-     | python3 -c 'import json,sys; print(json.load(sys.stdin).get("service_principal_client_id",""))')
+     | python3 -c 'import json,sys; d=sys.stdin.read().strip(); print(json.loads(d).get("service_principal_client_id","") if d else "")')
 if [ -z "$SP" ]; then
   echo "app $APP not found or has no service principal yet - deploy the app first"
   exit 1
@@ -24,8 +24,10 @@ fi
 echo "app service principal: $SP"
 
 for ep in $ENDPOINTS; do
+  # `json.load` on the empty stdin of a 404 raises, and the traceback reads like the
+  # script broke rather than like the endpoint simply is not there yet.
   id=$("$DB" serving-endpoints get "$ep" --profile "$PROFILE" -o json 2>/dev/null \
-       | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')
+       | python3 -c 'import json,sys; d=sys.stdin.read().strip(); print(json.loads(d).get("id","") if d else "")')
   if [ -z "$id" ]; then
     echo "  skip $ep (does not exist yet)"
     continue

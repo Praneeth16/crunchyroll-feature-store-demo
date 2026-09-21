@@ -1,0 +1,115 @@
+# The watch-next simulator, owned by the bundle.
+#
+# It used to be deployed by scripts/deploy_app.sh because CLI v1.14.1 could create
+# an app but not update one (docs/risks.md 8b). v1.17.0 fixes that: `bundle deploy`
+# updates the app's config and `bundle run crfs_watch_next` deploys its source.
+# An app that already exists outside the bundle has to be adopted once --
+#   databricks bundle deployment bind crfs_watch_next crfs-watch-next
+# -- otherwise deploy tries to create it and gets 409 ALREADY_EXISTS.
+#
+# `config` below carries BOTH the command and the environment, and app/app.yaml is
+# gone on purpose. Databricks Apps does not expand `${NAME}` inside app.yaml, so the
+# old template had to be rendered into a staging copy before upload; the bundle
+# resolves `${var.*}` itself, which removes that whole step and the class of bug
+# where an unrendered placeholder reaches the app as a literal string.
+#
+# The `postgres` resource auto-creates the app service principal's Postgres role but
+# NOT its grants on the crunchyroll_demo schema, which is owned by whoever published
+# the online tables. Run scripts/grant_app_postgres.sh after deploy, and again after
+# any new publish_table.
+#
+# Only the ranker is declared as a resource. App creation FAILS OUTRIGHT if it
+# references an endpoint that does not exist yet --
+#   Error: cannot create resources.apps.crfs_watch_next:
+#   Endpoint with name 'crunchyroll-candidate-retriever' does not exist (404)
+# -- and the retriever, feature-serving and agent endpoints are created by notebooks
+# 08, 07 and 12. Making the app un-deployable until the whole pipeline has run would
+# break `bundle deploy` on a fresh workspace, so those three are granted after the
+# fact by scripts/grant_app_endpoints.sh, which `make deploy-app` runs.
+resources:
+  apps:
+    crfs_watch_next:
+      name: ${var.app_name}
+      description: >-
+        Crunchyroll watch-next simulator: retrieval, entitlement filter and
+        ranking against the Lakebase Online Feature Store, with the raw online
+        feature rows and a measured freshness loop on screen.
+      source_code_path: ../app
+
+      resources:
+        - name: ranker
+          serving_endpoint:
+            name: ${var.ranker_endpoint}
+            permission: CAN_QUERY
+        - name: warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+        - name: postgres
+          postgres:
+            branch: projects/${var.lakebase_project}/branches/${var.lakebase_branch}
+            database: ${var.lakebase_db_resource}
+            permission: CAN_CONNECT_AND_CREATE
+        - name: burst_job
+          job:
+            id: ${resources.jobs.crfs_event_burst.id}
+            permission: CAN_MANAGE_RUN
+
+      config:
+        command:
+          - streamlit
+          - run
+          - app.py
+          - --server.port
+          - "8000"
+          - --server.address
+          - "0.0.0.0"
+        env:
+          - name: STREAMLIT_SERVER_ENABLE_CORS
+            value: "false"
+          - name: STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION
+            value: "false"
+          - name: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+            value: "false"
+
+          # `value_from` (snake_case) in a bundle, even though app.yaml spells the
+          # same field `valueFrom`. The bundle warns and IGNORES the camelCase form,
+          # which would leave the app with no warehouse id at all.
+          - name: DATABRICKS_WAREHOUSE_ID
+            value_from: warehouse
+
+          - name: DATABRICKS_CATALOG
+            value: ${var.catalog}
+          - name: DATABRICKS_SCHEMA
+            value: ${var.schema}
+
+          - name: RANKER_ENDPOINT
+            value: ${var.ranker_endpoint}
+          # The vertical (rail) ranker. Missing from the old app.yaml rendering path
+          # for one deploy, which the app survived by falling back to app.py's
+          # default -- i.e. the previous workspace's endpoint name.
+          - name: RAIL_RANKER_ENDPOINT
+            value: ${var.rail_ranker_endpoint}
+          - name: RETRIEVER_ENDPOINT
+            value: ${var.retriever_endpoint}
+          - name: FEATURE_ENDPOINT
+            value: ${var.feature_endpoint}
+          - name: AGENT_ENDPOINT
+            value: ${var.agent_endpoint}
+
+          - name: ONLINE_STORE
+            value: ${var.online_store}
+          - name: LAKEBASE_PROJECT
+            value: ${var.lakebase_project}
+          - name: LAKEBASE_BRANCH
+            value: ${var.lakebase_branch}
+          - name: LAKEBASE_ENDPOINT
+            value: ${var.lakebase_endpoint}
+
+          # The "watch 3 episodes now" button triggers this job, which appends events
+          # and then recomputes and refreshes the TRIGGERED table. Two serverless task
+          # starts plus a sync refresh do not fit in the app's old 180s window.
+          - name: BURST_JOB_ID
+            value: ${resources.jobs.crfs_event_burst.id}
+          - name: BURST_WAIT_S
+            value: "480"

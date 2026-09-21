@@ -48,8 +48,13 @@ validate: render ## Strict bundle validation
 deploy: validate ## Deploy jobs, volume and dashboard
 	$(BUNDLE) deploy $(FLAGS)
 
-deploy-app: ## Create/update the app, deploy its source, grant it access
-	./scripts/deploy_app.sh $(PROFILE) $(TARGET)
+# The app is a bundle resource now, so `deploy` already created or updated it and
+# `bundle run` is what pushes its source and restarts it. scripts/deploy_app.sh is
+# gone: it existed only because CLI v1.14.1 could not update an existing app, and it
+# had to render app.yaml's ${NAME} placeholders itself because Apps does not expand
+# them. The bundle resolves those, so both jobs disappeared with it.
+deploy-app: deploy ## Deploy the app's source from the bundle and grant it access
+	$(BUNDLE) run crfs_watch_next $(FLAGS)
 	@echo
 	@echo "Granting Postgres read access. Re-run after any new publish_table --"
 	@echo "ALTER DEFAULT PRIVILEGES covers future tables, a plain GRANT does not."
