@@ -1,0 +1,69 @@
+# The advanced track: Feature Views, feature-definition versioning, GPU training.
+#
+# Separate from resources/jobs.yml on purpose. Everything here stands on a Public
+# Preview API, so a workspace where a preview is off should fail to run *these* jobs
+# and nothing else. The GA demo (crfs_end_to_end, crfs_vertical) does not depend on
+# any of it.
+#
+# Run crfs_preview_probe first. It answers whether this workspace has the two
+# previews, and it is the cheapest possible way to find out.
+_common: &common_params
+  catalog: ${var.catalog}
+  schema: ${var.schema}
+  online_store: ${var.online_store}
+  online_capacity: ${var.online_capacity}
+  lakebase_project: ${var.lakebase_project}
+  lakebase_branch: ${var.lakebase_branch}
+  lakebase_endpoint: ${var.lakebase_endpoint}
+  ranker_endpoint: ${var.ranker_endpoint}
+  rail_ranker_endpoint: ${var.rail_ranker_endpoint}
+  retriever_endpoint: ${var.retriever_endpoint}
+  feature_endpoint: ${var.feature_endpoint}
+  agent_endpoint: ${var.agent_endpoint}
+  llm_endpoint: ${var.llm_endpoint}
+  warehouse_id: ${var.warehouse_id}
+  volume: ${var.volume}
+  end_date: ${var.end_date}
+
+resources:
+  jobs:
+    crfs_preview_probe:
+      name: crfs_preview_probe
+      description: >-
+        Report whether this workspace can run the advanced track: the
+        databricks-feature-engineering floor and the Feature Views entity surface,
+        whether a real feature computes, and whether a task can get a serverless GPU.
+        Registers nothing and writes nothing.
+      max_concurrent_runs: 1
+      tags:
+        demo: crunchyroll-feature-store
+        layer: advanced
+      # A task that sets `compute` must also name an environment:
+      #   An environment is required for serverless task gpu_probe when `compute` is
+      #   set on task level. Please define one using `environments` and environment_key.
+      # `environment_version` supersedes the deprecated `client` field used by the
+      # zerobus environment in resources/jobs.yml.
+      environments:
+        - environment_key: gpu
+          spec:
+            environment_version: "4"
+            dependencies:
+              - torch
+      tasks:
+        - task_key: feature_views_probe
+          notebook_task:
+            notebook_path: ../notebooks/30_advanced/29_preview_probe.py
+            base_parameters: *common_params
+          timeout_seconds: 1800
+
+        # Task-level `compute` is how a *notebook* task gets an accelerator. The
+        # accelerator is requested at task start, so an unavailable preview fails here
+        # with a platform message rather than inside the notebook.
+        - task_key: gpu_probe
+          compute:
+            hardware_accelerator: GPU_1xA10
+          environment_key: gpu
+          notebook_task:
+            notebook_path: ../notebooks/30_advanced/29b_gpu_probe.py
+            base_parameters: *common_params
+          timeout_seconds: 2400
