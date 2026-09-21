@@ -3,10 +3,10 @@
 > *How can we decouple a change or update in a feature definition between training and
 > inference? Can we add versioning to feature definitions?*
 
-Short answer: **table features are already decoupled, on-demand functions are not, and
-neither Feature Views nor feature tables have a built-in version number.** Versioning is
-a naming discipline plus two tags, and this repo implements and measures all three
-halves of that.
+Short answer: **a deployed model is pinned to the definitions it was logged with — measured,
+including for on-demand functions — and neither Feature Views nor feature tables have a
+built-in version number.** Versioning is therefore a naming discipline plus two tags, and
+this repo implements and measures it.
 
 Everything below is demonstrated by `notebooks/30_advanced/31_feature_versioning.py`
 (`make versioning`) against the live rail-ranking endpoint, not argued from docs.
@@ -28,23 +28,46 @@ print(V.render_spec(spec))
 
 The consequence is the important part:
 
-| A model depends on… | The endpoint resolves it… | An in-place change therefore… |
+| A model depends on… | Where it is pinned | Measured effect of an in-place change |
 |---|---|---|
-| feature **tables** and the columns it looks up | from the spec **inside the model version** | does **not** change what this model serves |
-| on-demand **functions** (`FeatureFunction` → a UC function) | **by name, at request time** | **does** change what this model serves, immediately |
+| feature **tables** and the columns it looks up | the spec inside the model version | none — the endpoint serves the spec it was logged with |
+| on-demand **functions** (`FeatureFunction` → a UC function) | named in the spec, resolved by the serving stack | **none observed within 5 minutes** |
 
-That asymmetry is the whole answer, and it is measurable. Notebook 31 §4 scores a fixed
-request against the live endpoint, runs `CREATE OR REPLACE FUNCTION` on
-`cr_rail_taste_match` so it returns a constant, scores the same request again, then
-restores the function from `src/crfs/udfs.py` and asserts the original ranking comes
-back. The measured before/after difference is recorded in
-[verification_log.md](verification_log.md).
+### What was measured, and how it differed from the expectation
+
+This document previously asserted an asymmetry: tables pinned, functions live. **The
+measurement does not support it.** Notebook 31 §4 scores one frozen request against the live
+endpoint, redefines `cr_rail_taste_match` with `CREATE OR REPLACE FUNCTION` so it returns a
+constant 0.0, and re-scores at +15s, +45s, +2min and +5min.
+
+Result on this workspace (`verification_log.md` V83): **0 of 16 rails moved and the maximum
+score delta was 0.000000** at every interval. The endpoint kept returning exactly what it
+returned before the function was redefined.
+
+So a UC function referenced by a `FeatureFunction` is resolved **when the model is
+deployed**, or cached for longer than five minutes — not looked up per request. That is
+better news than the original claim: an in-place function edit does not silently change a
+live endpoint's answers on this workspace.
+
+Two honest limits on that conclusion:
+
+* It is one endpoint on one workspace over five minutes. A longer cache TTL, a scale-up
+  event that builds a fresh container, or a different serving configuration could all pick
+  the change up later. **Do not rely on the pinning; rely on not editing in place.**
+* It says nothing about `fe.score_batch`, which resolves functions in the calling
+  environment and will use the new definition immediately.
+
+The rule below therefore stands, with a different justification than it started with: not
+"because production changes instantly", but **because a definition that changes under a
+model's feet is unreviewable and unauditable, and the pinning is an implementation detail
+nobody promised you.**
 
 ## Rules
 
-1. **Never edit a definition in place if a model pins it.** For a table this is merely
-   confusing — training moves, serving does not. For a UC function it is a production
-   change with no deploy, no version bump and no audit trail on any model.
+1. **Never edit a definition in place if a model pins it.** Not because production changes
+   instantly — measured, it does not — but because the change is invisible to every audit
+   trail a model version has, and because the pinning behaviour is an observation, not a
+   guarantee. A new deploy, a scale-up, or a longer window may pick it up.
 2. **Version by name, additively.** `x_v2` as a new column, a new table, a new
    `Feature`, or `cr_..._v2` as a new function. The old name keeps serving the old
    models until nothing pins it.
@@ -73,7 +96,7 @@ back. The measured before/after difference is recorded in
 |---|---|---|---|
 | **add** a column or a feature | add it; existing specs ignore it | register a new `Feature` | nobody |
 | **change the maths** of an existing feature | write `x_v2`, or a new table; retrain to bind it | new `Feature` name | nobody, provided the old name is untouched |
-| **change an on-demand function** | create `cr_..._v2`; retrain to bind it | new `CustomUDF` binding | everything serving it, immediately, if edited in place |
+| **change an on-demand function** | create `cr_..._v2`; retrain to bind it | new `CustomUDF` binding | nothing observed within 5 min on a live endpoint; `score_batch` picks it up immediately |
 | **remove** a feature | drop only after §7 shows nothing pins it | same | whatever still pins it |
 
 ## Do Feature Views have versions?
@@ -92,8 +115,10 @@ also the thing serving pins, so it is the right place for the guarantee to live.
   path by which the endpoint could read the new definition.
 * A retrain at 3pm picks up the new maths, gets a new version, a new fingerprint tag,
   and reaches traffic only when someone deploys it.
-* If instead someone edits `cr_rail_taste_match` at 2pm, the homepage changes at 2pm.
-  Notebook 31 measures exactly that, which is why rule 1 is first.
+* If instead someone edits `cr_rail_taste_match` at 2pm, the homepage does **not** change at
+  2pm — measured, across five minutes of polling. It changes whenever that endpoint is next
+  deployed or its container replaced, which is worse than instantly: nobody is watching then.
+  That is why rule 1 is first.
 
 ## Where it is enforced
 

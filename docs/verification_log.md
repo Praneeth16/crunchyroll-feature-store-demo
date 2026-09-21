@@ -706,3 +706,77 @@ drift report, the in-place UDF experiment and the canary -- had already run.
 `bundle validate`. It reproduces this exact failure in under a second, and also checks that
 `%pip` is alone in its cell. The class of bug is worth a script: every instance is free to
 find locally and charges a full job run to find remotely.
+
+### V83 · The in-place function experiment disproved this repo's own claim
+
+`feature_versioning.md`, notebook 31 and the README all asserted an asymmetry: a model's
+feature *tables* are pinned inside its version, while its on-demand *functions* are resolved
+by name per request — so `CREATE OR REPLACE FUNCTION` was described as a production change
+with no deploy and no version bump.
+
+**The measurement does not support it.** Notebook 31 §4 scored one frozen request (16 rails,
+viewer v0001, frozen request clock) against the live `crunchyroll-rail-ranker` serving
+version 11, redefined `cr_rail_taste_match` to return a constant 0.0, and re-scored:
+
+```
+rails_moved      0 of 16
+max_score_delta  0.000000
+```
+
+Identical ranks and identical scores. The function was then restored from
+`src/crfs/udfs.py` and the baseline reproduced exactly (the notebook asserts this in a
+`finally`, so the workspace cannot be left with a constant-returning UDF).
+
+So on this workspace a UC function named by a `FeatureFunction` is resolved **when the model
+is deployed**, or cached well beyond a single request — not looked up live. That is better
+news than the claim it replaces, and the docs now say so.
+
+**Two limits on concluding from this**, both now in the doc:
+
+* One endpoint, one workspace, and the first version of this experiment sampled a single
+  point 15 seconds after the change. The notebook now polls at +15s, +45s, +2min and +5min
+  and reports whichever way it comes out; a longer cache TTL or a container replacement
+  could still pick the change up later.
+* It says nothing about `fe.score_batch`, which resolves functions in the calling
+  environment and will use a new definition immediately.
+
+The versioning rule is unchanged and its justification is not: version definitions by name
+**because an in-place edit is invisible to every audit trail a model version has**, not
+because production changes instantly. It does not.
+
+**How this got into the docs in the first place** is the part worth keeping: the asymmetry
+was plausible, it was written down as fact, and the notebook that was supposed to demonstrate
+it inferred agreement from a single sample taken 15 seconds after the change. A measurement
+designed to confirm rather than to discriminate will confirm.
+
+### V84 · What else the versioning run established
+
+Same run, 20.9 minutes, all of it against the live endpoint:
+
+| Check | Result |
+|---|---|
+| served version vs `@champion` | 11 / 11 |
+| drift report for the served version | `ok` — every pinned table and function present and unchanged |
+| canary traffic split | `[(rail_ranker-11, 90), (crunchyroll_rail_ranker-10, 10)]`, **10/10 requests answered**, restored to 100% |
+| versioned-by-name function created beside v1 | `cr_rail_taste_match_v2`, and the live ranking did not move |
+| fleet drift scan | 5 registered models, all `ok` |
+
+The reverse index is the best evidence yet for the shared-feature-layer claim, because it is
+resolved from what the models actually pin rather than from a diagram:
+
+```
+viewer_features_ts       crunchyroll_ranker, crunchyroll_rail_ranker, crunchyroll_rail_ranker_gpu
+recent_behavior_ts       crunchyroll_ranker, crunchyroll_rail_ranker, crunchyroll_rail_ranker_gpu
+rail_features_ts         crunchyroll_rail_ranker, crunchyroll_rail_ranker_gpu
+viewer_rail_features_ts  crunchyroll_rail_ranker, crunchyroll_rail_ranker_gpu
+cr_hour_affinity_delta   all three rankers
+```
+
+**Three models pin the same two viewer tables.** Nobody wrote that down; it was read out of
+the model versions.
+
+One gap this exposed: `crunchyroll_ranker_fv`, the Feature-Views model, reports `0 tables,
+0 functions`. Its spec references **features**, not tables, so `versioning.spec_tables`
+finds nothing to check. The drift report says `ok` for it, which is vacuous rather than
+wrong — recorded here because a fleet view that cannot see a whole authoring path is worth
+knowing about before it is trusted.

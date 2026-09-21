@@ -451,39 +451,78 @@ score_input = (labels.select("viewer_id", "rail_id", "ts", "device", "locale",
 # logged environment costs a minute of setup per worker and is what makes a torch model
 # scoreable through Spark at all.
 def score_with_env(model_uri, df):
-    try:
-        return fe.score_batch(model_uri=model_uri, df=df,
-                              env_manager="virtualenv").toPandas(), "virtualenv"
-    except Exception as e:
-        print(f"  virtualenv env_manager failed ({type(e).__name__}: {str(e)[:140]}); "
-              "retrying in the current environment")
-        return fe.score_batch(model_uri=model_uri, df=df).toPandas(), "local"
+    """Try hardest-first, and never fail the run over an optional comparison.
+
+    `score_batch` evaluates the model inside a Spark UDF, and the executor environment is
+    not the notebook's: the worker imports the model directly and raises
+    `ModuleNotFoundError: No module named 'torch'`, surfaced as a PythonException from
+    mlflow/pyfunc. `env_manager="virtualenv"` is meant to rebuild the logged environment
+    there; on this workspace's serverless compute it did not succeed either.
+
+    So this is reported as a platform limitation rather than dressed up or crashed over.
+    The model itself is already trained, registered, tagged and aliased by the cells above;
+    what cannot be demonstrated here is *batch scoring a torch model through a Spark UDF*.
+    Model Serving is unaffected -- it builds the model's own environment when it deploys.
+    """
+    attempts = [("virtualenv", {"env_manager": "virtualenv"}),
+                ("local", {})]
+    for label, kw in attempts:
+        try:
+            return fe.score_batch(model_uri=model_uri, df=df, **kw).toPandas(), label
+        except Exception as e:
+            print(f"  score_batch({label}) failed: {type(e).__name__}: {str(e)[:180]}")
+    return None, "unavailable"
 
 
 gpu_scored, gpu_env = score_with_env(f"models:/{MODEL}/{version}", score_input)
-print(f"GPU model scored: {len(gpu_scored)} rows (env_manager={gpu_env})")
+comparison = {}
+if gpu_scored is None:
+    comparison = {"error": "score_batch could not run the torch model in a Spark worker "
+                           "on this workspace (torch missing in the executor environment, "
+                           "and env_manager=virtualenv did not resolve it)"}
+    print("\nGPU model scored: NOT via score_batch.", comparison["error"])
+    # The model is still exercised, on the driver, where torch exists. This proves the
+    # artifact loads and predicts; it does NOT exercise automatic feature lookup, and the
+    # difference is stated rather than glossed.
+    try:
+        import mlflow.pyfunc as _pyfunc
 
-sk_model = cfg.t("crunchyroll_rail_ranker")
-try:
-    sk_version = mc.get_model_version_by_alias(sk_model, "champion").version
-    # The sklearn model needs no env restore: scikit-learn is in the worker already.
-    sk_scored = fe.score_batch(model_uri=f"models:/{sk_model}/{sk_version}",
-                               df=score_input).toPandas()
-    key = ["viewer_id", "rail_id"]
-    merged = (gpu_scored[key + ["engagement_probability"]]
-              .merge(sk_scored[key + ["engagement_probability"]], on=key,
-                     suffixes=("_gpu", "_sk")))
-    rho = spearmanr(merged["engagement_probability_gpu"],
-                    merged["engagement_probability_sk"]).statistic
-    print(f"\nsklearn v{sk_version} vs GPU v{version} on {len(merged)} rows: "
-          f"Spearman {rho:0.4f}")
-    print("Both resolved their own features from their own pinned specs -- neither call")
-    print("supplied a feature value.")
-    comparison = {"sklearn_version": sk_version, "spearman": round(float(rho), 4),
-                  "rows": len(merged)}
-except Exception as e:
-    print("sklearn comparison unavailable:", type(e).__name__, str(e)[:160])
-    comparison = {"error": f"{type(e).__name__}: {str(e)[:160]}"}
+        local_model = _pyfunc.load_model(f"models:/{MODEL}/{version}")
+        local_pred = local_model.predict(serving_like)
+        print(f"driver-side predict: {len(local_pred)} rows, "
+              f"ranks {sorted(local_pred['rail_rank'])[:6]}")
+        comparison["driver_side_rows"] = int(len(local_pred))
+        comparison["note"] = ("driver-side predict works; feature values were supplied by "
+                              "the exported training set, so automatic lookup is untested "
+                              "here. The sklearn twin in notebook 26 covers that path.")
+    except Exception as e:
+        print("driver-side predict also failed:", type(e).__name__, str(e)[:160])
+        comparison["driver_side_error"] = f"{type(e).__name__}: {str(e)[:160]}"
+else:
+    print(f"GPU model scored: {len(gpu_scored)} rows (env_manager={gpu_env})")
+    sk_model = cfg.t("crunchyroll_rail_ranker")
+    try:
+        from scipy.stats import spearmanr
+
+        sk_version = mc.get_model_version_by_alias(sk_model, "champion").version
+        # The sklearn model needs no env restore: scikit-learn is in the worker already.
+        sk_scored = fe.score_batch(model_uri=f"models:/{sk_model}/{sk_version}",
+                                   df=score_input).toPandas()
+        key = ["viewer_id", "rail_id"]
+        merged = (gpu_scored[key + ["engagement_probability"]]
+                  .merge(sk_scored[key + ["engagement_probability"]], on=key,
+                         suffixes=("_gpu", "_sk")))
+        rho = spearmanr(merged["engagement_probability_gpu"],
+                        merged["engagement_probability_sk"]).statistic
+        print(f"\nsklearn v{sk_version} vs GPU v{version} on {len(merged)} rows: "
+              f"Spearman {rho:0.4f}")
+        print("Both resolved their own features from their own pinned specs -- neither call")
+        print("supplied a feature value.")
+        comparison = {"sklearn_version": sk_version, "spearman": round(float(rho), 4),
+                      "rows": len(merged)}
+    except Exception as e:
+        print("sklearn comparison unavailable:", type(e).__name__, str(e)[:160])
+        comparison = {"error": f"{type(e).__name__}: {str(e)[:160]}"}
 # COMMAND ----------
 dbutils.notebook.exit(json.dumps({
     "model": MODEL, "version": version, "run_id": run_id,

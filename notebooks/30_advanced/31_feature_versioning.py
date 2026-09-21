@@ -9,15 +9,16 @@
 # MAGIC discipline you have to impose. This notebook separates the two by measuring them
 # MAGIC against a live endpoint rather than describing them.
 # MAGIC
-# MAGIC | What a model depends on | How the endpoint resolves it | So an in-place change… |
+# MAGIC | What a model depends on | Where it is pinned | Measured effect of an in-place change |
 # MAGIC |---|---|---|
-# MAGIC | feature **tables** and the columns it looks up | from the **feature spec inside the model version** | …does not change what this model serves |
-# MAGIC | on-demand **functions** (`FeatureFunction` → a UC function) | **by name, at request time** | …changes what this model serves, immediately |
+# MAGIC | feature **tables** and the columns it looks up | the feature spec inside the model version | none — the endpoint keeps serving the spec it was logged with |
+# MAGIC | on-demand **functions** (`FeatureFunction` → a UC function) | named in the spec, resolved by the serving stack | **none observed within 5 minutes** on this workspace — see §4 |
 # MAGIC
-# MAGIC That asymmetry is the whole finding, and §4 demonstrates it: the same request is
-# MAGIC scored, a UC function is redefined underneath the live endpoint, and the request is
-# MAGIC scored again. The function is restored from `src/crfs/udfs.py` afterwards and the
-# MAGIC restoration is verified, not assumed.
+# MAGIC §4 is the measurement, and it did not come out the way this notebook originally
+# MAGIC assumed. The same request is scored, `cr_rail_taste_match` is redefined underneath
+# MAGIC the live endpoint to return a constant, and the request is scored again, repeatedly,
+# MAGIC for five minutes. The function is restored from `src/crfs/udfs.py` afterwards in a
+# MAGIC `finally`, and the restoration is verified rather than assumed.
 # MAGIC
 # MAGIC Sections:
 # MAGIC
@@ -166,20 +167,24 @@ results["drift_before"] = report
 # MAGIC %md
 # MAGIC ## 4 · The experiment: redefine a function under the live endpoint
 # MAGIC
-# MAGIC `cr_rail_taste_match` is an on-demand feature: the model's spec names it, and
-# MAGIC Model Serving calls it **by name, per request**. Nothing about it is copied into
-# MAGIC the model artifact, which means an in-place redefinition is a production change
-# MAGIC with no deploy, no version bump and no audit trail on the model.
+# MAGIC `cr_rail_taste_match` is an on-demand feature: the model's spec names it as a
+# MAGIC `FeatureFunction`, and the serving stack evaluates it. The question this section
+# MAGIC settles is **when** that resolution happens — at deploy, or per request — because
+# MAGIC the answer decides whether `CREATE OR REPLACE FUNCTION` is a production change.
 # MAGIC
-# MAGIC Three measurements against the same request:
+# MAGIC The measurement, against one frozen request:
 # MAGIC
 # MAGIC 1. baseline — the ranking the endpoint returns now,
-# MAGIC 2. after `CREATE OR REPLACE FUNCTION` returns a constant 0.0,
-# MAGIC 3. after restoring the definition from `src/crfs/udfs.py`.
+# MAGIC 2. `CREATE OR REPLACE FUNCTION` so it returns a constant 0.0, then re-score at
+# MAGIC    +15s, +45s, +2min and +5min,
+# MAGIC 3. restore from `src/crfs/udfs.py` and confirm the baseline comes back.
 # MAGIC
-# MAGIC If (2) differs from (1) then on-demand features are **not** pinned, and the rule
-# MAGIC in §5 is not style advice. The restore runs in a `finally` and is verified by
-# MAGIC comparing (3) against (1).
+# MAGIC **Measured on this workspace: no change, at any of those intervals — identical ranks
+# MAGIC and identical scores to six decimal places.** So the function is resolved when the
+# MAGIC model is deployed, or cached for longer than five minutes; it is not looked up live
+# MAGIC per request. An earlier version of this notebook asserted the opposite and inferred
+# MAGIC it from a single 15-second sample, which is exactly the kind of claim this repo is
+# MAGIC supposed to measure instead of assume.
 # COMMAND ----------
 rails_for_viewer = R.eligible_rails(spark, cfg.fq, VIEWER)
 rail_ids = list(rails_for_viewer["rail_id"])
@@ -229,18 +234,42 @@ else:
     try:
         spark.sql(ZEROED_DDL)
         print("redefined cr_rail_taste_match to return 0.0 -- no deploy, no version bump")
-        # The endpoint resolves the function per request, but give the catalog a moment
-        # so a cached plan cannot be mistaken for "the change had no effect".
-        time.sleep(15)
-        after, ms_after = ranked()
-        moved, dscore = compare(baseline, after)
-        print(f"\nafter redefinition ({ms_after:0.0f} ms): {len(moved)} of {len(baseline)} "
-              f"rails changed rank, max |delta score| = {dscore:0.4f}")
-        for rid, (rank, prob) in sorted(after.items(), key=lambda kv: kv[1][0])[:6]:
-            was = baseline.get(rid, ("-", float("nan")))
-            print(f"  {rank:2d}  {rid:16s} {prob:0.4f}   (was rank {was[0]}, {was[1]:0.4f})")
-        experiment.update(ran=True, rails_moved=len(moved), max_score_delta=dscore,
-                          n_rails=len(baseline))
+
+        # Sampled over several minutes, not once. The first version of this waited 15s,
+        # saw a byte-identical result, and the notebook around it asserted that on-demand
+        # functions are resolved per request -- so a single sample was being read as
+        # evidence for a mechanism it cannot establish. If the endpoint picks the change up
+        # at all, this shows when; if it never does within the window, that is the finding.
+        probes = []
+        for wait_s in (15, 45, 120, 300):
+            time.sleep(wait_s if not probes else wait_s - probes[-1]["waited_s"])
+            after, ms_after = ranked()
+            moved, dscore = compare(baseline, after)
+            probes.append({"waited_s": wait_s, "rails_moved": len(moved),
+                           "max_score_delta": round(dscore, 6), "ms": round(ms_after)})
+            print(f"  +{wait_s:>4}s: {len(moved)} of {len(baseline)} rails moved, "
+                  f"max |delta score| = {dscore:0.6f}")
+            if moved or dscore > 1e-9:
+                break
+
+        picked_up = any(p["rails_moved"] or p["max_score_delta"] > 1e-9 for p in probes)
+        experiment.update(ran=True, probes=probes, picked_up=picked_up,
+                          n_rails=len(baseline),
+                          rails_moved=probes[-1]["rails_moved"],
+                          max_score_delta=probes[-1]["max_score_delta"])
+        print()
+        if picked_up:
+            first = next(p for p in probes if p["rails_moved"] or p["max_score_delta"] > 1e-9)
+            print(f"The endpoint DID pick up the redefinition, first seen at "
+                  f"+{first['waited_s']}s. An in-place function change is therefore a "
+                  f"production change with no deploy and no version bump.")
+        else:
+            print(f"The endpoint did NOT pick up the redefinition within "
+                  f"{probes[-1]['waited_s']}s: identical ranks and identical scores to six "
+                  f"decimal places. So on this workspace a UC function is resolved when the "
+                  f"model is deployed, or cached for longer than this window -- NOT looked "
+                  f"up live per request. Read the rule in section 5 as auditability and "
+                  f"reviewability, not as protection against a live change.")
     finally:
         for ddl in U.rail_ddl(cfg.fq):
             spark.sql(ddl)

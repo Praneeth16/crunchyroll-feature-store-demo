@@ -353,18 +353,20 @@ registers nothing and writes nothing.
 | | Command | What it shows | Doc |
 |---|---|---|---|
 | **Feature Views** | `make feature-views` | The same viewer aggregates *declared* instead of computed: 7 features over `engagement_events`, registered in UC, a training set with **no table name in it**, logged into a model, scored in batch, then materialized into the online store the GA demo already owns | [feature_views.md](docs/feature_views.md) |
-| **Versioning** | `make versioning` | What a deployed model version **pins**, and the measured difference between a table change (pinned — safe) and an in-place UC-function change (resolved per request — **not** safe), plus a 90/10 canary traffic split and a reverse index of which models pin which objects | [feature_versioning.md](docs/feature_versioning.md) |
+| **Versioning** | `make versioning` | What a deployed model version **pins**, measured against the live endpoint rather than assumed — including redefining a UC function underneath it and finding the answers unchanged — plus a 90/10 canary traffic split and a reverse index of which models pin which objects | [feature_versioning.md](docs/feature_versioning.md) |
 | **GPU training** | `make gpu-train` | The rail ranker as a torch MLP on a serverless A10, from the **same** point-in-time training set, logged with the **same** feature spec so it is a drop-in for the same endpoint. Closes [open_items](docs/open_items.md) §4 | [gpu_training.md](docs/gpu_training.md) |
 
 Measured by `make probe` on this workspace (us-east-1): Feature Views usable, and a task
 asking for `GPU_1xA10` gets an **NVIDIA A10G, 23 GB, torch 2.7.1+cu126**. Neither preview
 is available in GCP us-west1, which is Crunchyroll's region — the same gap as Lakebase.
 
-The one finding worth carrying into any design discussion: **on-demand feature functions
-are not pinned.** A model's feature spec names them, and Model Serving resolves them *by
-name, per request*, so `CREATE OR REPLACE FUNCTION` on one is a production change with no
-deploy and no version bump. Table features are pinned and behave the opposite way.
-Notebook 31 measures both against the live endpoint.
+The finding worth carrying into any design discussion, and it is the opposite of what this
+repo first assumed: **a deployed model appears pinned to its on-demand functions too.**
+Redefining `cr_rail_taste_match` under the live endpoint changed nothing — 0 of 16 rails
+moved, score delta 0.000000, polled over five minutes. So a UC function is resolved at
+deploy time or cached well beyond a request, not looked up live. Version definitions by name
+anyway: the pinning is an observation rather than a promise, and an in-place edit is
+invisible to every audit trail a model version has.
 
 ---
 
