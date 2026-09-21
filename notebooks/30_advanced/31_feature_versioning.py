@@ -345,6 +345,14 @@ else:
     live = (ep.config.served_entities or [])[0]
 
 
+    def _plain(v):
+        """SDK enums are not JSON serializable, and the endpoint config goes over REST.
+        `live.workload_type` comes back as ServingModelWorkloadType, so a straight copy
+        fails with `TypeError: Object of type ServingModelWorkloadType is not JSON
+        serializable` -- from json.dumps, which names the type and not the field."""
+        return getattr(v, "value", v)
+
+
     def sized(name, version):
         """Copy the sizing mode the endpoint actually realised.
 
@@ -357,12 +365,12 @@ else:
         """
         out = {"name": name, "entity_name": live.entity_name,
                "entity_version": str(version), "scale_to_zero_enabled": False,
-               "workload_type": live.workload_type or "CPU"}
+               "workload_type": _plain(live.workload_type) or "CPU"}
         if live.min_provisioned_concurrency is not None:
             out["min_provisioned_concurrency"] = live.min_provisioned_concurrency
             out["max_provisioned_concurrency"] = live.max_provisioned_concurrency
         else:
-            out["workload_size"] = live.workload_size
+            out["workload_size"] = _plain(live.workload_size)
         return out
 
 
