@@ -169,7 +169,13 @@ def build_recent_behavior(events_pdf: pd.DataFrame, titles_pdf: pd.DataFrame,
     else:
         wanted = pd.Index(pd.unique(events_pdf["viewer_id"]))
 
-    win = ev[ev["event_ts"] > as_of - pd.Timedelta(hours=24)]
+    # BOTH bounds. The lower one alone is only correct when `as_of` is the end of the
+    # data, which is true for recent_behavior_current and false for every historical
+    # snapshot -- a 24h window with no upper bound silently includes the future, which is
+    # the leakage this whole table is supposed to avoid. Verified with a three-day
+    # fixture: without the upper bound, the 1 September snapshot carried 3 September's
+    # minutes.
+    win = ev[(ev["event_ts"] > as_of - pd.Timedelta(hours=24)) & (ev["event_ts"] <= as_of)]
     watched = win[win["watch_seconds"].fillna(0) > 0]
 
     agg = pd.DataFrame(index=wanted)
@@ -212,3 +218,30 @@ def session_aggregate(stream_df, watermark: str = "10 minutes"):
                  F.count("*").cast("int").alias("session_events"),
                  F.max(F.unix_timestamp("event_ts")).cast("long").alias("last_event_epoch_s"),
                  F.max("produced_epoch_ms").cast("long").alias("src_event_epoch_ms")))
+
+
+def build_recent_behavior_timeseries(events_pdf: pd.DataFrame, titles_pdf: pd.DataFrame,
+                                     dates, viewer_ids=None) -> pd.DataFrame:
+    """Daily snapshots of the last-24h features -- the point-in-time source.
+
+    Why this exists: `recent_behavior_current` holds one as-of value per viewer, so a
+    `FeatureLookup` without a `timestamp_lookup_key` gives **every historical label
+    today's** 24-hour behaviour. For the rail ranker that is leakage: a homepage
+    impression from three weeks ago was scored, at training time, with what the viewer
+    did last night.
+
+    One row per (viewer, day). `build_recent_behavior` computes one day; this calls it
+    per day, which is the same arithmetic rather than a second implementation of it.
+    Vectorising across days would be faster and would give this file two definitions of
+    a 24-hour window to keep in agreement.
+    """
+    frames = []
+    for day in pd.to_datetime(pd.Index(dates)).normalize().unique():
+        # As-of the END of the day, so a label stamped that day sees the window that
+        # closed with it rather than one that closed the previous midnight.
+        as_of = pd.Timestamp(day) + pd.Timedelta(days=1)
+        snap = build_recent_behavior(events_pdf, titles_pdf, as_of, viewer_ids=viewer_ids)
+        snap["ts"] = pd.Timestamp(day)
+        frames.append(snap)
+    out = pd.concat(frames, ignore_index=True)
+    return out[["viewer_id", "ts"] + RECENT_FEATURE_COLS]

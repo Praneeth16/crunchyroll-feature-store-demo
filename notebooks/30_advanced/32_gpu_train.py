@@ -51,7 +51,6 @@ if _root not in sys.path:
 from src.crfs.config import Config
 from src.crfs import rails as R
 from src.crfs import train_gpu as TG
-from src.crfs import udfs as U
 from src.crfs import versioning as V
 
 cfg = Config.from_widgets(dbutils, extra_widgets={
@@ -105,7 +104,7 @@ else:
 # MAGIC between the two models is the estimator. The labels carry IPS weights, because a
 # MAGIC homepage log's labels were observed at positions the incumbent policy chose.
 # COMMAND ----------
-from databricks.feature_engineering import FeatureEngineeringClient, FeatureLookup
+from databricks.feature_engineering import FeatureEngineeringClient
 from pyspark.sql import functions as F
 
 fe = FeatureEngineeringClient()
@@ -143,17 +142,14 @@ labels = labels_sdf
 n_labels = labels.count()
 print(f"labels: {n_labels:,} of {full_labels:,} in the full log ({FRAC:.0%} of sessions)")
 
-# Identical to notebook 22's LOOKUPS: two shared viewer tables, two rail tables, and
-# the five request-time functions. Identical on purpose -- the whole claim of this
-# notebook is that only the estimator changed.
-LOOKUPS = [
-    FeatureLookup(table_name=cfg.t("viewer_features_current"), lookup_key="viewer_id"),
-    FeatureLookup(table_name=cfg.t("recent_behavior_current"), lookup_key="viewer_id"),
-    FeatureLookup(table_name=cfg.t("rail_features"), lookup_key="rail_id"),
-    FeatureLookup(table_name=cfg.t("viewer_rail_features_ts"),
-                  lookup_key=["viewer_id", "rail_id"],
-                  timestamp_lookup_key="ts"),
-] + U.rail_feature_functions(cfg.fq)
+# The same object notebook 22 trains on, from src/crfs/rails.py -- not a copy. When these
+# were two lists they drifted: notebook 22's version looked up three tables without a
+# timestamp, so the GPU model inherited the same leakage by construction.
+LOOKUPS = R.rail_lookups(cfg)
+for _lk in LOOKUPS:
+    _tbl = getattr(_lk, "table_name", None)
+    if _tbl:
+        print(f"  lookup {_tbl.split('.')[-1]:26s} as-of={getattr(_lk, 'timestamp_lookup_key', None)}")
 
 # sample_weight stays OUT of the feature set and comes back via the export below:
 # a weight is not a feature, and leaving it in would let the model read the label.
@@ -447,12 +443,30 @@ score_input = (labels.select("viewer_id", "rail_id", "ts", "device", "locale",
                              "hour_of_day", "day_of_week", "request_epoch_s")
                .limit(400))
 
-gpu_scored = fe.score_batch(model_uri=f"models:/{MODEL}/{version}", df=score_input).toPandas()
-print("GPU model scored:", len(gpu_scored), "rows")
+# `env_manager="virtualenv"` is required for THIS model and not for the sklearn one.
+# score_batch evaluates the model inside a Spark UDF, and the executor environment is not
+# the notebook's: with the default env_manager the worker imports the model directly and
+# fails with `ModuleNotFoundError: No module named 'torch'`, reported as a
+# PythonException from mlflow/pyfunc rather than as a missing dependency. Restoring the
+# logged environment costs a minute of setup per worker and is what makes a torch model
+# scoreable through Spark at all.
+def score_with_env(model_uri, df):
+    try:
+        return fe.score_batch(model_uri=model_uri, df=df,
+                              env_manager="virtualenv").toPandas(), "virtualenv"
+    except Exception as e:
+        print(f"  virtualenv env_manager failed ({type(e).__name__}: {str(e)[:140]}); "
+              "retrying in the current environment")
+        return fe.score_batch(model_uri=model_uri, df=df).toPandas(), "local"
+
+
+gpu_scored, gpu_env = score_with_env(f"models:/{MODEL}/{version}", score_input)
+print(f"GPU model scored: {len(gpu_scored)} rows (env_manager={gpu_env})")
 
 sk_model = cfg.t("crunchyroll_rail_ranker")
 try:
     sk_version = mc.get_model_version_by_alias(sk_model, "champion").version
+    # The sklearn model needs no env restore: scikit-learn is in the worker already.
     sk_scored = fe.score_batch(model_uri=f"models:/{sk_model}/{sk_version}",
                                df=score_input).toPandas()
     key = ["viewer_id", "rail_id"]

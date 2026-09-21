@@ -30,7 +30,10 @@ else
   bad "history ends ${freshness:-?}d ago - re-run notebook 00 (the demo clock has drifted)"
 fi
 
-for t in viewer_features_current recent_behavior_current title_features viewer_features_ts; do
+# recent_behavior_ts and rail_features_ts are the point-in-time sources the rail ranker's
+# feature spec resolves. Without them the training lookups fall back to nothing -- and the
+# demo's headline metrics were invalid while they were missing.
+for t in viewer_features_current recent_behavior_current title_features viewer_features_ts recent_behavior_ts; do
   n=$(q "SELECT count(*) AS n FROM $CATALOG.$SCHEMA.$t" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["n"])' 2>/dev/null)
   [ -n "$n" ] && [ "$n" -gt 0 ] && ok "$t: $n rows" || bad "$t: empty or missing"
 done
@@ -80,7 +83,7 @@ query_endpoint "$RAIL_EP_Q" \
 echo
 echo "vertical (rail) ranking"
 
-for t in rails rail_impressions rail_position_propensity rail_features viewer_rail_features_ts; do
+for t in rails rail_impressions rail_position_propensity rail_features rail_features_ts viewer_rail_features_ts; do
   n=$(q "SELECT count(*) AS n FROM $CATALOG.$SCHEMA.$t" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["n"])' 2>/dev/null)
   [ -n "$n" ] && [ "$n" -gt 0 ] && ok "$t: $n rows" || bad "$t: empty or missing - run 'make vertical'"
 done

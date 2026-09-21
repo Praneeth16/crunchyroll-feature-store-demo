@@ -460,10 +460,13 @@ results["canary"] = canary
 # MAGIC version pins, and whether those objects still match what was recorded. A feature
 # MAGIC nobody pins is safe to delete; one that three models pin is not.
 # COMMAND ----------
-models = [m.name for m in mc.search_registered_models(filter_string=f"catalog='{cfg.catalog}'")
-          if m.name.startswith(f"{cfg.catalog}.{cfg.schema}.")]
+# The Unity Catalog registry rejects MlflowClient.search_registered_models(filter_string=...)
+#   MlflowException: Argument 'filter_string' is unsupported for models in the Unity Catalog.
+# and it does so after 40 minutes of useful work in the cells above, which is the worst
+# place to learn it. The SDK's registered-models API takes catalog and schema directly.
+models = [m.full_name for m in w.registered_models.list(catalog_name=cfg.catalog,
+                                                        schema_name=cfg.schema)]
 print(f"{len(models)} registered models in {cfg.fq}\n")
-
 fleet = []
 pins = {}
 

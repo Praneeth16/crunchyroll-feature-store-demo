@@ -60,6 +60,9 @@ cfg = Config.from_widgets(dbutils, extra_widgets={
     "batch_hour": "21",
     "batch_output": "rail_rankings_batch",
     "batch_top_n": "0",                # 0 = keep every scored rail
+    # Above this many changed viewers, incremental stops being worth it and the IN
+    # predicate becomes the risk. See viewers_with_changed_features.
+    "batch_incremental_max_viewers": "50000",
 })
 spark.sql(f"USE {cfg.fq}")
 MODE = cfg.extras["batch_mode"].strip().lower()
@@ -67,6 +70,7 @@ DEVICE = cfg.extras["batch_device"]
 HOUR = int(cfg.extras["batch_hour"])
 OUT = cfg.extras["batch_output"]
 TOP_N = int(cfg.extras["batch_top_n"])
+MAX_INCREMENTAL_VIEWERS = int(cfg.extras["batch_incremental_max_viewers"])
 MODEL = cfg.t("crunchyroll_rail_ranker")
 print(cfg.describe())
 print(f"\nmode={MODE} context=({DEVICE}, {HOUR}:00) output={cfg.t(OUT)}")
@@ -135,6 +139,19 @@ def viewers_with_changed_features(since_version_by_table: dict) -> list:
                        .select("viewer_id").distinct())
             n = changed.count()
             print(f"  {tbl}: {n} viewers changed since version {ver}")
+            # The id list is collected to the driver, expanded into an IN predicate for
+            # eligibility and again into a replaceWhere. That is fine for a subset and a
+            # driver-memory / SQL-parser hazard for a large one, so it is bounded rather
+            # than left to fail: past this many changed viewers a full refresh is both
+            # safer and cheaper than a giant predicate, and it is what the job does.
+            #
+            # Removing the bound properly means keeping targets as a DataFrame and using a
+            # join plus a Delta MERGE -- worth doing at Crunchyroll's cardinality, and
+            # noted in docs/batch_and_online.md rather than pretended away here.
+            if len(ids) + n > MAX_INCREMENTAL_VIEWERS:
+                print(f"  {tbl}: {n} changed viewers exceeds the incremental bound "
+                      f"({MAX_INCREMENTAL_VIEWERS}) -> full refresh")
+                return None
             ids |= {r["viewer_id"] for r in changed.collect()}
         except Exception as e:
             print(f"  {tbl}: CDF unavailable ({type(e).__name__}), forcing full refresh")

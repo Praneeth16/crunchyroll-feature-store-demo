@@ -76,6 +76,7 @@ spark.sql(f"USE {cfg.fq}")
 print(cfg.describe())
 # COMMAND ----------
 import json
+import time
 import pandas as pd
 from databricks.sdk import WorkspaceClient
 from databricks.feature_engineering import FeatureEngineeringClient
@@ -118,6 +119,37 @@ rail_features = R.build_rail_features(rails_pdf, rail_titles_pdf, title_features
                                       audience)
 print("rail_features:", rail_features.shape)
 display(spark.createDataFrame(rail_features))
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ### The same features, as of every day
+# MAGIC
+# MAGIC `rail_features` above is one row per rail, as of now. Training on a log of past
+# MAGIC impressions needs the values **as of each impression**, and the difference is not
+# MAGIC cosmetic: `rail_ctr_30d` and `rail_clicks_30d` are aggregates of the very `engaged`
+# MAGIC column the model predicts, so looking them up without a timestamp puts a holdout
+# MAGIC impression's own click inside its own features.
+# MAGIC
+# MAGIC One Spark aggregate per day over the impression log, so this is the slow cell in
+# MAGIC this notebook. The window is bounded at both ends -- an unbounded upper edge would
+# MAGIC reintroduce exactly the leakage the snapshots exist to remove.
+# COMMAND ----------
+_days = [r["d"] for r in spark.sql(f"""
+    SELECT DISTINCT to_date(rendered_ts) AS d
+    FROM {cfg.t('rail_impressions')} ORDER BY d
+""").collect()]
+print(f"building rail feature snapshots for {len(_days)} days "
+      f"({_days[0]} .. {_days[-1]})")
+_t0 = time.perf_counter()
+rail_features_ts = R.build_rail_features_timeseries(
+    spark, cfg.t("rail_impressions"), rails_pdf, rail_titles_pdf, title_features_pdf,
+    dates=_days)
+print(f"rail_features_ts: {rail_features_ts.shape} in {time.perf_counter() - _t0:0.0f}s")
+# The point of the table, shown rather than asserted: the same rail's CTR moves.
+_probe = (rail_features_ts[rail_features_ts["rail_id"] == rail_features_ts["rail_id"].iloc[0]]
+          [["rail_id", "ts", "rail_impressions_30d", "rail_clicks_30d", "rail_ctr_30d"]])
+print("\none rail across time (if these were constant, the snapshots would be pointless):")
+print(_probe.head(6).to_string(index=False))
+print(_probe.tail(3).to_string(index=False))
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## `viewer_rail_features_ts` — how this viewer treats this rail, point in time
@@ -231,6 +263,13 @@ upsert_feature_table(
     "Per-rail audience and content features for vertical (rail) ranking - mirrored to the online store",
     online_name="online_rail_features")
 upsert_feature_table(
+    spark.createDataFrame(rail_features_ts), "rail_features_ts", ["rail_id", "ts"],
+    "Daily per-rail audience and content snapshots. The point-in-time training source for "
+    "vertical ranking: rail_ctr_30d and rail_clicks_30d are aggregates of the label, so a "
+    "lookup without a timestamp would leak it. Published online, where it deduplicates to "
+    "the latest snapshot per rail.",
+    timeseries="ts", online_name="online_rail_features_ts")
+upsert_feature_table(
     staged, "viewer_rail_features_ts", ["viewer_id", "rail_id", "ts"],
     "Daily viewer x rail engagement snapshots. Point-in-time source for vertical ranking "
     "offline, and the same table published online where it deduplicates to the latest "
@@ -258,6 +297,7 @@ print("online store:", store)
 # COMMAND ----------
 PUBLISH = [
     ("rail_features", "online_rail_features"),
+    ("rail_features_ts", "online_rail_features_ts"),
     ("viewer_rail_features_ts", "online_viewer_rail"),
 ]
 
@@ -347,7 +387,8 @@ dbutils.notebook.exit(json.dumps({
     "viewer_rail_online_rows": int(online_rows),
     "reused_unchanged": ["viewer_features_current", "recent_behavior_current",
                          "session_features_current", "title_features"],
-    "new_feature_tables": ["rail_features", "viewer_rail_features_ts"],
+    "new_feature_tables": ["rail_features", "rail_features_ts",
+                           "viewer_rail_features_ts"],
     "online_tables": [{"table": d, "action": a} for _, d, a in published],
     "latency_measured_by": "notebooks/90_ops/25_serving_benchmark.py (make bench)",
     "sync": [{k: s.get(k) for k in ("name", "detailed_state", "last_processed_commit_version")}

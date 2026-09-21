@@ -132,8 +132,13 @@ in two:
    (`/Volumes/<cat>/<schema>/crfs_ops/gpu_training/training_set`). The excluded
    `sample_weight` is re-attached here, with a row-count check, because a weight must
    not be a feature but the loop needs it.
-2. **GPU task, no Spark** — reads that Parquet in row batches with `pyarrow.dataset` and
-   trains in minibatches. The memory ceiling is the batch, not the dataset.
+2. **GPU task, no Spark** — reads that Parquet and trains in minibatches on the device.
+   Two paths, and the difference is stated rather than blurred: `train()` loads the
+   exported set as one frame, which is correct at this demo's size and is **not**
+   out-of-core; `train_streaming()` (pass `streaming=True`) encodes and steps per Parquet
+   batch, so its ceiling really is the batch. The Spark side never collects either way,
+   which is the part that mattered — `toPandas()` on the full join is what put notebook 22
+   on a 25% sample.
 
 Consequences worth knowing: the expensive join runs once and every training iteration
 after it is cheap; the GPU process needs no Spark session, which is what lets the same
@@ -159,6 +164,25 @@ fe.log_model(model=GpuRailRanker(), flavor=mlflow.pyfunc,
   and deployment stay separate steps.
 * Notebook 32 §7 scores the same rows through both models with `fe.score_batch` and
   reports the rank correlation. Neither call supplies a feature value.
+
+## Scoring a torch model through Spark needs its environment restored
+
+`fe.score_batch` evaluates a model inside a Spark UDF, and the executor environment is
+not the notebook's. The GPU model is logged with `extra_pip_requirements=["torch==…"]`,
+but with the default `env_manager` the worker imports it directly and fails:
+
+```
+ModuleNotFoundError: No module named 'torch'
+  ... PythonException from mlflow/pyfunc/__init__.py, SQLSTATE 38000
+```
+
+Pass `env_manager="virtualenv"` so the logged environment is rebuilt in the worker.
+Notebook 32 does, and falls back to the current environment with the reason printed if
+that is unavailable. The sklearn rail ranker needs none of this — scikit-learn is already
+there — which is exactly why the difference is easy to miss until a torch model appears.
+
+The serving endpoint is unaffected: Model Serving builds the model's own environment when
+it deploys, so this is a batch-scoring concern, not a serving one.
 
 ## Cost
 

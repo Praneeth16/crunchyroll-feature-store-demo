@@ -165,16 +165,22 @@ display(labels_sdf.limit(5))
 # MAGIC columns matched, the as-of join would be decoration and the model would be
 # MAGIC training on the future.
 # COMMAND ----------
-LOOKUPS = [
-    # --- shared with the watch-next ranker, byte for byte -------------------
-    FeatureLookup(table_name=cfg.t("viewer_features_current"), lookup_key="viewer_id"),
-    FeatureLookup(table_name=cfg.t("recent_behavior_current"), lookup_key="viewer_id"),
-    # --- new for vertical ranking -------------------------------------------
-    FeatureLookup(table_name=cfg.t("rail_features"), lookup_key="rail_id"),
-    FeatureLookup(table_name=cfg.t("viewer_rail_features_ts"),
-                  lookup_key=["viewer_id", "rail_id"],
-                  timestamp_lookup_key="ts"),
-] + U.rail_feature_functions(cfg.fq)
+# Every lookup is point-in-time, and the lookups live in src/crfs/rails.py so notebook 32
+# trains on the identical set rather than a copy of it.
+#
+# This used to look up viewer_features_current, recent_behavior_current and rail_features
+# WITHOUT a timestamp, which handed every historical label today's values. For the viewer
+# tables that is ordinary leakage; for rail_features it is worse -- rail_ctr_30d and
+# rail_clicks_30d are aggregates of the same `engaged` column this model predicts, so a
+# holdout impression's own click sat inside its own features and the reported NDCG and AUC
+# were invalid rather than optimistic. Notebooks 01 and 21 now build and publish the
+# matching _ts tables; offline they are read as-of each label, online they deduplicate to
+# the latest row per key, so serving is unchanged.
+LOOKUPS = R.rail_lookups(cfg)
+for _lk in LOOKUPS:
+    _tbl = getattr(_lk, "table_name", None)
+    if _tbl:
+        print(f"  lookup {_tbl.split('.')[-1]:26s} as-of={getattr(_lk, 'timestamp_lookup_key', None)}")
 
 # Narrowed to a handful of viewers BEFORE the join, not `orderBy(...).limit(400)`
 # after it. The as-of join is the expensive operation in this notebook; asking for a

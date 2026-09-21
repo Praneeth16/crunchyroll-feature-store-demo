@@ -396,16 +396,26 @@ SELECT rail_id,
        SUM(watch_seconds_from_rail)      AS rail_watch_seconds_30d,
        SUM(titles_played)                AS rail_titles_played_30d
 FROM {impressions}
-WHERE rendered_ts > TIMESTAMP '{cutoff}'
+WHERE rendered_ts >  TIMESTAMP '{cutoff}'
+  AND rendered_ts <= TIMESTAMP '{as_of}'
 GROUP BY rail_id
 """
 
 
 def rail_audience(spark, impressions_table: str, as_of: pd.Timestamp) -> pd.DataFrame:
-    """Last-30-day audience behaviour per rail. One row per rail."""
+    """Last-30-day audience behaviour per rail, as of `as_of`. One row per rail.
+
+    Bounded at BOTH ends. The lower bound alone is only correct when `as_of` is the end
+    of the log, and these aggregates are built per-day for the point-in-time table --
+    where an unbounded upper edge means a snapshot dated three weeks ago counts clicks
+    that had not happened yet. `rail_clicks_30d` and `rail_ctr_30d` are derived from the
+    same `engaged` column the model predicts, so that is not mild leakage: it is the
+    label, aggregated.
+    """
     cutoff = (pd.Timestamp(as_of) - pd.Timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
-    return spark.sql(RAIL_AUDIENCE_SQL.format(impressions=impressions_table,
-                                              cutoff=cutoff)).toPandas()
+    return spark.sql(RAIL_AUDIENCE_SQL.format(
+        impressions=impressions_table, cutoff=cutoff,
+        as_of=pd.Timestamp(as_of).strftime("%Y-%m-%d %H:%M:%S"))).toPandas()
 
 
 def build_rail_features(rails_pdf: pd.DataFrame, rail_titles_pdf: pd.DataFrame,
@@ -803,3 +813,68 @@ def check_model_columns(columns, numeric, categorical, not_features):
     missing = [c for c in numeric + categorical if c not in columns]
     unused = sorted(set(columns) - set(numeric) - set(categorical) - set(not_features))
     return missing, unused
+
+
+def build_rail_features_timeseries(spark, impressions_table: str, rails_pdf,
+                                   rail_titles_pdf, title_features_pdf, dates):
+    """Daily snapshots of the rail-grain features -- the point-in-time source.
+
+    `rail_features` holds one as-of row per rail, so a `FeatureLookup` on it without a
+    `timestamp_lookup_key` hands **every historical label today's** rail statistics. For
+    `rail_ctr_30d` and `rail_clicks_30d` that is the label itself, aggregated: they are
+    computed from the `engaged` column the model is trained to predict, so a holdout
+    impression's own click is inside its own features. Offline metrics computed that way
+    are not conservative estimates, they are invalid.
+
+    One row per (rail, day). The per-day cost is one Spark aggregate over the impression
+    log plus a 16-row pandas join, so this is the slow part of notebook 21 -- the log is
+    scanned once per day rather than once.
+    """
+    import pandas as _pd
+
+    frames = []
+    for day in _pd.to_datetime(_pd.Index(dates)).normalize().unique():
+        as_of = _pd.Timestamp(day) + _pd.Timedelta(days=1)
+        audience = rail_audience(spark, impressions_table, as_of)
+        snap = build_rail_features(rails_pdf, rail_titles_pdf, title_features_pdf, audience)
+        snap["ts"] = _pd.Timestamp(day)
+        frames.append(snap)
+    out = _pd.concat(frames, ignore_index=True)
+    return out[["rail_id", "ts"] + RAIL_FEATURE_COLS]
+
+
+def rail_lookups(cfg, point_in_time: bool = True):
+    """The rail ranker's FeatureLookups and FeatureFunctions, defined once.
+
+    Notebook 22 (scikit-learn) and notebook 32 (torch on GPU) both train on this, and a
+    second copy was how they came to disagree about which tables are point-in-time.
+
+    `point_in_time=True` is the correct setting for training on a historical label log:
+    every lookup carries `timestamp_lookup_key="ts"`, so each label sees the feature
+    values as of its own impression rather than as of today. The `_current` tables cannot
+    do that -- they hold one row per key -- which is why this reads the `_ts` tables that
+    notebooks 01 and 21 publish alongside them.
+
+    At serving time the same spec resolves against the online copies of those `_ts`
+    tables, which are deduplicated to the latest row per key: point-in-time offline,
+    latest-per-key online, one definition. That is exactly the shape
+    `viewer_rail_features_ts` already had, and README's own recommendation was to collapse
+    the others the same way.
+    """
+    from databricks.feature_engineering import FeatureLookup
+    from . import udfs as U
+
+    ts = {"timestamp_lookup_key": "ts"} if point_in_time else {}
+    viewer_tbl = "viewer_features_ts" if point_in_time else "viewer_features_current"
+    recent_tbl = "recent_behavior_ts" if point_in_time else "recent_behavior_current"
+    rail_tbl = "rail_features_ts" if point_in_time else "rail_features"
+
+    return [
+        # --- shared with the watch-next ranker ---------------------------------
+        FeatureLookup(table_name=cfg.t(viewer_tbl), lookup_key="viewer_id", **ts),
+        FeatureLookup(table_name=cfg.t(recent_tbl), lookup_key="viewer_id", **ts),
+        # --- rail grain --------------------------------------------------------
+        FeatureLookup(table_name=cfg.t(rail_tbl), lookup_key="rail_id", **ts),
+        FeatureLookup(table_name=cfg.t("viewer_rail_features_ts"),
+                      lookup_key=["viewer_id", "rail_id"], timestamp_lookup_key="ts"),
+    ] + U.rail_feature_functions(cfg.fq)

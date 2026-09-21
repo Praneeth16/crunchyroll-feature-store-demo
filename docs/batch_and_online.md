@@ -165,3 +165,31 @@ request-path endpoint bills continuously.
   is measured at demo scale only. Sizing it needs their MAU and their feature-change rate.
 * **`rail_features` changes force a full refresh.** At a minutes cadence, how often
   rail-grain features change is a design input we do not have.
+
+
+---
+
+## Two limits in the incremental path, stated rather than discovered
+
+Both found by review of the code rather than by a run, and both matter at Crunchyroll's
+cardinality rather than at this demo's.
+
+**1 · The changed-viewer set goes through the driver.** `viewers_with_changed_features`
+collects viewer ids from each Change Data Feed, and the result is expanded into an `IN`
+predicate for eligibility and again into a `replaceWhere`. At tens of thousands of ids
+that is fine; at hundreds of thousands it is a driver-memory and SQL-parser hazard, in the
+exact path whose purpose is to scale.
+
+Mitigated, not solved: `batch_incremental_max_viewers` (default 50,000) forces a full
+refresh once the change set exceeds it, because past that point a full rescore is cheaper
+and safer than a giant predicate. **The real fix is to keep targets as a DataFrame and use
+a join plus a Delta `MERGE`**, which also removes the `replaceWhere` string entirely. That
+is the change to make before running this at production cardinality.
+
+**2 · A configuration change invalidates the whole table, and the run has to know.** The
+output table mixes nothing silently now: the run records a **scoring signature** (model
+version, device, hour, top-N, output table) beside the feature-table versions, and any
+mismatch forces a full refresh. Without it, changing `batch_device` or the champion alias
+produced either an untouched stale table — no feature commits, so no target viewers — or a
+table holding rows scored under two different configurations with nothing on the row to
+distinguish them.

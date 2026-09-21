@@ -98,6 +98,16 @@ print("title_features:", title_features.shape)
 # COMMAND ----------
 recent_behavior = F.build_recent_behavior(events, titles, AS_OF)
 print("recent_behavior_current:", recent_behavior.shape)
+
+# Daily snapshots of the same 24h features. The _current table holds one row per viewer,
+# so a training lookup against it gives every historical label TODAY's behaviour -- which
+# for a log of past impressions is leakage. The rail ranker looks this up point-in-time
+# (src/crfs/rails.py::rail_lookups); the online copy is deduplicated to the latest row per
+# key, so serving reads the same values _current would have given it.
+recent_ts = F.build_recent_behavior_timeseries(
+    events, titles, dates=[d.date() for d in viewer_ts["ts"].unique()])
+print("recent_behavior_ts:", recent_ts.shape,
+      f"({recent_ts['ts'].nunique()} daily snapshots)")
 print("viewers with activity in the last 24h:",
       int((recent_behavior["minutes_watched_24h"] > 0).sum()))
 # COMMAND ----------
@@ -156,6 +166,10 @@ upsert_feature_table(
     recent_behavior, "recent_behavior_current", ["viewer_id"],
     "Last-24h viewer behaviour - the freshness-sensitive class, mirrored to the online store",
     online_name="online_recent_behavior")
+upsert_feature_table(
+    recent_ts, "recent_behavior_ts", ["viewer_id", "ts"],
+    "Daily snapshots of last-24h viewer behaviour - the point-in-time training source",
+    timeseries="ts", online_name="online_recent_behavior_ts")
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## The Lakebase-backed Online Feature Store
@@ -196,6 +210,13 @@ PUBLISH = [
     ("viewer_features_current", "online_viewer_features"),
     ("title_features", "online_title_features"),
     ("recent_behavior_current", "online_recent_behavior"),
+    # The point-in-time tables are published too, because the rail ranker's feature spec
+    # resolves THEM at serving time now (see rails.rail_lookups). Publishing a time series
+    # table deduplicates it to the latest row per key -- the same behaviour
+    # viewer_rail_features_ts already relies on -- so the online copy carries one row per
+    # viewer and the values match what the _current tables hold.
+    ("viewer_features_ts", "online_viewer_features_ts"),
+    ("recent_behavior_ts", "online_recent_behavior_ts"),
 ]
 
 published = []
@@ -234,7 +255,8 @@ dbutils.notebook.exit(json.dumps({
     "as_of": str(AS_OF),
     "online_store": cfg.online_store,
     "feature_tables": ["viewer_features_ts", "viewer_features_current",
-                       "title_features", "recent_behavior_current"],
+                       "title_features", "recent_behavior_current",
+                       "recent_behavior_ts"],
     "online_tables": [{"table": d, "action": a} for _, d, a in published],
     "viewer_feature_cols": F.VIEWER_FEATURE_COLS,
     "sync": [{k: s.get(k) for k in ("name", "detailed_state", "last_processed_commit_version")}
