@@ -161,11 +161,16 @@ print(f"labels: {n_labels} ({FRAC:.0%} of the impression log)")
 #
 # They are not features: encode() reads FEATURE_COLS + context + categorical only, so
 # an id cannot reach the model.
+# Nothing is excluded. `event_ts` has to survive into the frame: the split below is
+# time-ordered, and with the timestamp gone it fell through to slicing a frame whose row
+# order neither Spark nor Arrow guarantees -- a nondeterministic, non-temporal holdout
+# reported as a temporal one. It is carried, not learned from: FEATURE_COLS below is the
+# feature-view names plus hour_of_day, and nothing else reaches the model.
 training_set = fe.create_training_set(
     df=labels,
     features=features,
     label="engaged",
-    exclude_columns=["event_ts"],
+    exclude_columns=[],
 )
 train_df = training_set.load_df()
 print("training columns:", train_df.columns)
@@ -198,15 +203,19 @@ CATEGORICAL = ["surface", "device", "locale"]
 # are carried, not learned from.
 IDS = ["viewer_id", "title_id"]
 
-# Time-ordered split. A random split on an impression log leaks the future into the
-# training set through the very windows these features aggregate.
-cut = train_pdf["event_ts"].quantile(0.8) if "event_ts" in train_pdf else None
-if cut is not None:
-    tr = train_pdf[train_pdf["event_ts"] <= cut]
-    te = train_pdf[train_pdf["event_ts"] > cut]
-else:
-    tr, te = train_pdf.iloc[: int(0.8 * len(train_pdf))], train_pdf.iloc[int(0.8 * len(train_pdf)):]
-print(f"train {len(tr)} | holdout {len(te)}")
+# Time-ordered split, and it must be a real one: a random split on an impression log
+# leaks the future into the training set through the very windows these features
+# aggregate. Asserted rather than assumed, because the fallback this replaced produced a
+# positional slice of an unordered frame and still printed plausible sizes.
+assert "event_ts" in train_pdf.columns, (
+    "event_ts is missing from the training frame, so a time-ordered split is impossible. "
+    "Check exclude_columns.")
+train_pdf = train_pdf.sort_values("event_ts")
+cut = train_pdf["event_ts"].quantile(0.8)
+tr = train_pdf[train_pdf["event_ts"] <= cut]
+te = train_pdf[train_pdf["event_ts"] > cut]
+assert len(tr) and len(te), f"degenerate split at {cut}: train {len(tr)}, holdout {len(te)}"
+print(f"train {len(tr)} (<= {cut}) | holdout {len(te)} (> {cut})")
 
 encoders = {c: {v: i for i, v in enumerate(sorted(train_pdf[c].dropna().unique()))}
             for c in CATEGORICAL}
@@ -419,8 +428,13 @@ from databricks.feature_engineering.entities import (
 
 PREFIX = cfg.extras["fv_prefix"]
 t0 = time.perf_counter()
-materialized = fe.materialize_features(
-    features=features,
+# `materialize_features` is NOT idempotent -- a second call for the same feature raises
+#   ResourceAlreadyExists: Materialized features already exist for features '...'
+# and that failed a re-run of this notebook outright. `FV.materialize_new` skips what is
+# already materialized, so re-running is safe the same way notebook 01's
+# upsert_feature_table is.
+created, skipped = FV.materialize_new(
+    fe, features, cfg.catalog, cfg.schema,
     offline_config=OfflineStoreConfig(
         catalog_name=cfg.catalog,
         schema_name=cfg.schema,
@@ -434,9 +448,8 @@ materialized = fe.materialize_features(
     ),
     trigger=TableTrigger(),
 )
-print(f"materialize_features returned in {time.perf_counter() - t0:0.1f}s")
-for m in (materialized or []):
-    print(" ", m)
+print(f"\nmaterialize pass finished in {time.perf_counter() - t0:0.1f}s: "
+      f"{len(created)} new, {len(skipped)} already there")
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## 9 · What it actually created
@@ -456,17 +469,19 @@ for m in (materialized or []):
 #
 # A wait loop that stops at "some table with rows exists" therefore reports success on a
 # partial materialization, which is what the first run did.
-materialized_report = {}
-try:
-    listed = fe.list_materialized_features()
-    rows = list(listed) if listed is not None else []
-    print(f"list_materialized_features: {len(rows)} entries")
-    for m in rows[:40]:
-        print("  ", m)
-    materialized_report["listed"] = [str(m) for m in rows]
-except Exception as e:
-    print("list_materialized_features unavailable:", type(e).__name__, str(e)[:160])
-    materialized_report["listed"] = f"{type(e).__name__}: {e}"
+materialized_report = {"created": created, "skipped": skipped}
+# Per feature, not catalog-wide: `list_materialized_features` takes a required
+# `feature_name` keyword, and calling it without one raises a TypeError that looks like
+# "nothing is materialized" if it is swallowed.
+listed_all = {}
+for f in features:
+    full = f"{cfg.catalog}.{cfg.schema}.{f.name}"
+    entries = FV.materializations_of(fe, full)
+    listed_all[f.name] = [str(e)[:200] for e in entries]
+    print(f"  {f.name:26s} {len(entries)} materialization(s)")
+    for e in entries[:1]:
+        print(f"      {str(e)[:200]}")
+materialized_report["listed"] = listed_all
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ### Wait for the offline tables, then for the online copy

@@ -727,8 +727,6 @@ def eligible_rails_all(spark, fq: str, viewers=None, as_of=None):
     materialised into a small helper table rather than reimplemented in SQL -- one
     definition, same answer in both paths.
     """
-    from pyspark.sql import functions as F
-
     clock_expr = (f"SELECT TIMESTAMP'{as_of}' AS as_of" if as_of is not None
                   else f"SELECT MAX(event_ts) AS as_of FROM {fq}.engagement_events")
 

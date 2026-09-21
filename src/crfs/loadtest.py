@@ -456,9 +456,9 @@ def sustained_phase(client, payload, concurrency: int = 32, total_s: float = 600
     samples = []
     t0 = time.perf_counter()
     stop_at = t0 + total_s
-    import threading
-    lock = threading.Lock()
 
+    # No lock: each worker returns its own list and ThreadPoolExecutor.map merges them
+    # on this thread, so there is no shared mutable state to protect.
     def worker():
         local = []
         while time.perf_counter() < stop_at:

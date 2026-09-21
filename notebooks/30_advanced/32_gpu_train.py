@@ -176,8 +176,12 @@ print("training columns:", len(training_set.load_df().columns))
 # COMMAND ----------
 t0 = time.perf_counter()
 parquet_path = TG.export_training_set(training_set, VOLUME_DIR, label="engaged",
+                                      # `ts` comes back too: train() splits on it, and
+                                      # without it the split fell through to physical
+                                      # Parquet order, which Spark does not guarantee.
                                       extra=labels.select("viewer_id", "rail_id",
-                                                          "request_epoch_s", "sample_weight"),
+                                                          "request_epoch_s", "sample_weight",
+                                                          "ts"),
                                       join_keys=["viewer_id", "rail_id", "request_epoch_s"])
 print(f"exported to {parquet_path} in {time.perf_counter() - t0:0.1f}s")
 files = dbutils.fs.ls(parquet_path)

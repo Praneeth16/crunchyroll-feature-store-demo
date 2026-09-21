@@ -201,3 +201,80 @@ def title_features(catalog: str, schema: str) -> list:
 def all_features(catalog: str, schema: str) -> list:
     """Both grains, which is what notebook 30 trains on."""
     return viewer_features(catalog, schema) + title_features(catalog, schema)
+
+
+def materializations_of(fe, full_name: str) -> list:
+    """Every materialization of one feature, or [] if it has none.
+
+    `list_materialized_features` is **per feature**, not a catalog-wide listing:
+        TypeError: list_materialized_features() missing 1 required keyword-only
+        argument: 'feature_name'
+    Calling it without one looks like an empty result if the exception is swallowed,
+    which is how a first version of this reported "nothing is materialized" about a
+    schema with twelve materialized features.
+    """
+    try:
+        return list(fe.list_materialized_features(feature_name=full_name) or [])
+    except Exception:
+        return []
+
+
+def already_materialized(fe, features, catalog: str, schema: str) -> set:
+    """Full names of features that already have a materialization."""
+    out = set()
+    for f in features:
+        full = f"{catalog}.{schema}.{f.name}"
+        if materializations_of(fe, full):
+            out.add(full)
+    return out
+
+
+def _names_in_error(e: Exception, features, catalog: str, schema: str) -> set:
+    msg = str(e)
+    return {f"{catalog}.{schema}.{f.name}" for f in features
+            if f"{catalog}.{schema}.{f.name}" in msg}
+
+
+def materialize_new(fe, features, catalog: str, schema: str, log=print, **kwargs):
+    """Materialize only the features that are not materialized yet.
+
+    `materialize_features` is **not** idempotent: a second call for the same feature
+    raises `ResourceAlreadyExists: Materialized features already exist for features
+    '...'`, which failed a re-run of notebook 30 outright. Every other build step in this
+    repo is safe to re-run (see `upsert_feature_table` in notebook 01), and this makes
+    this one match.
+
+    Two passes, because the listing and the error are independent sources of truth and
+    either can be the one that knows: skip what the listing reports, then if the call
+    still complains, subtract exactly the names it named and retry once with the rest.
+
+    Returns (created, skipped) as lists of full names.
+    """
+    existing = already_materialized(fe, features, catalog, schema)
+    todo = [f for f in features if f"{catalog}.{schema}.{f.name}" not in existing]
+    skipped = sorted(existing)
+    for name in skipped:
+        log(f"already materialized: {name}")
+    if not todo:
+        log("nothing new to materialize")
+        return [], skipped
+
+    try:
+        fe.materialize_features(features=todo, **kwargs)
+        created = [f"{catalog}.{schema}.{f.name}" for f in todo]
+    except Exception as e:
+        if "AlreadyExists" not in type(e).__name__ and not _already_exists(e):
+            raise
+        named = _names_in_error(e, todo, catalog, schema)
+        retry = [f for f in todo if f"{catalog}.{schema}.{f.name}" not in named]
+        skipped += sorted(named)
+        for name in sorted(named):
+            log(f"already materialized (reported by the API): {name}")
+        if not retry:
+            return [], sorted(set(skipped))
+        fe.materialize_features(features=retry, **kwargs)
+        created = [f"{catalog}.{schema}.{f.name}" for f in retry]
+
+    for name in created:
+        log(f"materialized: {name}")
+    return created, sorted(set(skipped))

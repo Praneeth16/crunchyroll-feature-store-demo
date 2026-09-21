@@ -162,15 +162,39 @@ try:
 except Exception:
     print("no previous batch state; this run is a full refresh")
 
+# Everything that changes what a row means. Feature-table versions answer "whose
+# features moved"; they say nothing about the model version or the context the table was
+# precomputed for. Without this, changing `batch_device`, `batch_hour`, `batch_top_n` or
+# the champion alias produced either an untouched stale table (no feature commits, so no
+# target viewers) or -- worse -- a table mixing rows scored under two different
+# configurations, with nothing on the row to tell them apart.
+scoring_signature = {
+    "model": MODEL, "model_version": VERSION,
+    "device": DEVICE, "hour": int(HOUR), "top_n": int(TOP_N), "output": OUT,
+}
+print("scoring signature:", json.dumps(scoring_signature, sort_keys=True))
+
 target_viewers = None
 if MODE == "incremental" and prev_state is not None:
-    since = json.loads(prev_state["table_versions"])
-    target_viewers = viewers_with_changed_features(since)
-    if target_viewers is None:
+    prev_sig = None
+    try:
+        prev_sig = json.loads(prev_state["scoring_signature"] or "{}")
+    except Exception:
+        prev_sig = None          # a state row written before signatures existed
+    if prev_sig != scoring_signature:
         MODE = "full"
-        print("-> falling back to full refresh")
+        changed = sorted(k for k in set(scoring_signature) | set(prev_sig or {})
+                         if (prev_sig or {}).get(k) != scoring_signature.get(k))
+        print(f"-> scoring configuration changed ({', '.join(changed) or 'no prior signature'}); "
+              "every row in the table was scored under the old one, so this is a full refresh")
     else:
-        print(f"-> incremental: {len(target_viewers)} viewers to rescore")
+        since = json.loads(prev_state["table_versions"])
+        target_viewers = viewers_with_changed_features(since)
+        if target_viewers is None:
+            MODE = "full"
+            print("-> falling back to full refresh")
+        else:
+            print(f"-> incremental: {len(target_viewers)} viewers to rescore")
 elif MODE == "incremental":
     MODE = "full"
     print("-> no prior state, running full refresh")
@@ -197,8 +221,15 @@ scoring_sdf = (elig
                .withColumn("device", F.lit(DEVICE))
                .withColumn("locale", F.lit("en-US"))
                .withColumn("hour_of_day", F.lit(HOUR).cast("bigint"))
+               # Spark's dayofweek is Sunday=1..Saturday=7. Training builds this column
+               # with pandas `dt.dayofweek` and serving with `time.localtime().tm_wday`,
+               # both Monday=0..Sunday=6. `- 1` made Sunday 0 and Monday 1, shifting all
+               # seven days -- so the batch scorer was not the offline twin of the
+               # endpoint it is supposed to agree with. (dayofweek + 5) % 7 maps
+               # Sunday=1 -> 6, Monday=2 -> 0, Saturday=7 -> 5.
                .withColumn("day_of_week",
-                           F.dayofweek(F.current_timestamp()).cast("bigint") - F.lit(1))
+                           ((F.dayofweek(F.current_timestamp()) + F.lit(5)) % F.lit(7))
+                           .cast("bigint"))
                .withColumn("ts", F.current_timestamp())
                .withColumn("request_epoch_s",
                            F.unix_timestamp(F.current_timestamp()).cast("bigint")))
@@ -286,9 +317,13 @@ display(spark.table(out_full).orderBy("viewer_id", "rail_rank").limit(20))
 # COMMAND ----------
 # record state so the next run can go incremental
 state_rows = spark.createDataFrame(
-    [(json.dumps(versions_now), MODE, int(n_scored), float(score_s))],
+    [(json.dumps(versions_now), json.dumps(scoring_signature, sort_keys=True),
+      MODE, int(n_scored), float(score_s))],
     schema=T.StructType([
         T.StructField("table_versions", T.StringType()),
+        # The signature the rows in the output table were scored under. The next run
+        # compares against it and refuses to go incremental across a change.
+        T.StructField("scoring_signature", T.StringType()),
         T.StructField("mode", T.StringType()),
         T.StructField("rows_scored", T.IntegerType()),
         T.StructField("score_seconds", T.DoubleType())])

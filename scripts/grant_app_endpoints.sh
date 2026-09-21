@@ -12,7 +12,7 @@ PROFILE="${1:-fe-vm-lakebase-praneeth}"
 APP="${APP:-crfs-watch-next}"
 # crunchyroll-rail-ranker is included: the app's vertical-ranking page cannot render
 # without CAN_QUERY on it, and it is created by notebook 23 rather than by the bundle.
-ENDPOINTS="${ENDPOINTS:-crunchyroll-rail-ranker crunchyroll-candidate-retriever crunchyroll-viewer-features crunchyroll-explainer-agent}"
+ENDPOINTS="${ENDPOINTS:-crunchyroll-watch-next-ranker crunchyroll-rail-ranker crunchyroll-candidate-retriever crunchyroll-viewer-features crunchyroll-explainer-agent}"
 DB=$(command -v databricks || echo /opt/homebrew/bin/databricks)
 
 SP=$("$DB" apps get "$APP" --profile "$PROFILE" -o json 2>/dev/null \

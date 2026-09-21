@@ -129,6 +129,14 @@ def _function_fingerprint(spark, name: str) -> str:
     return json.dumps(kept, separators=(",", ":"))
 
 
+def table_fingerprint_hash(fp: dict) -> str:
+    return _hash({"tables": fp.get("tables", {})})
+
+
+def function_fingerprint_hash(fp: dict) -> str:
+    return _hash({"functions": fp.get("functions", {})})
+
+
 def definition_fingerprint(spark, spec: dict) -> dict:
     """What the objects this spec depends on look like right now.
 
@@ -149,10 +157,27 @@ def definition_fingerprint(spark, spec: dict) -> dict:
     return out
 
 
+def _hash(obj) -> str:
+    return hashlib.sha256(
+        json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:12]
+
+
 def fingerprint_hash(fp: dict) -> str:
-    """Twelve hex characters, short enough to be a model tag and a commit message."""
-    blob = json.dumps(fp, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(blob.encode()).hexdigest()[:12]
+    """Twelve hex characters, short enough to be a model tag and a commit message.
+
+    **What this hash does and does not cover.** It is computed from table *schemas* and
+    function *bodies*. A function body change is therefore detected. A table that is
+    republished with the same column names and types but different maths is **not** --
+    the schema is identical, so the hash is identical, and `drift_report` will say the
+    definitions are unchanged. That is the exact case `docs/feature_versioning.md` tells
+    you to avoid by versioning a changed definition under a new name, and the reason the
+    advice is a rule rather than a preference: the tooling cannot catch it for you.
+
+    Detecting it would need provenance the platform does not attach to a table -- which
+    pipeline wrote it, from which source revision. The honest position is to say so here
+    rather than to let a matching hash imply more than it knows.
+    """
+    return _hash(fp)
 
 
 def spec_hash(spec: dict) -> str:
@@ -203,22 +228,55 @@ def drift_report(spark, model_uri: str, recorded_fingerprint: str = None) -> dic
     for f in missing_funcs:
         findings.append(f"BROKEN   function {f} no longer exists -- request-time "
                         "features for this model will fail")
-    if recorded_fingerprint and recorded_fingerprint != now and not (missing_tables or missing_funcs):
+    # A changed TABLE and a changed FUNCTION have opposite consequences, so they cannot
+    # share one message. The endpoint resolves table lookups from the spec inside the
+    # model version, but it resolves UC functions BY NAME per request -- notebook 31
+    # measures exactly that. Reporting both as "behaviour has not changed" would hand out
+    # a false all-clear during live drift.
+    changed = bool(recorded_fingerprint) and recorded_fingerprint != now
+    if changed and not (missing_tables or missing_funcs):
+        if spec_functions(spec):
+            findings.append(
+                f"CHANGED  definitions differ from training ({recorded_fingerprint} -> "
+                f"{now}), and this model pins {len(spec_functions(spec))} on-demand "
+                "function(s), which the endpoint resolves BY NAME per request. If the "
+                "change was to a function body, live behaviour has ALREADY changed. "
+                "Compare the function fingerprint to be sure.")
+        else:
+            findings.append(
+                f"CHANGED  definitions differ from training ({recorded_fingerprint} -> "
+                f"{now}). This model pins no functions, so the endpoint still serves its "
+                "pinned spec and behaviour has not changed; a retrain would learn "
+                "something different.")
+
+    status = "ok"
+    if missing_tables or missing_funcs:
+        status = "broken"
+    elif changed:
+        status = "changed"
+    elif not recorded_fingerprint:
+        # No baseline means no comparison was possible. Reporting that as ok made the
+        # fleet view mark every untagged model healthy, which is the opposite of what an
+        # absent baseline means.
+        status = "unverifiable"
         findings.append(
-            f"CHANGED  definitions differ from training ({recorded_fingerprint} -> {now}). "
-            "The model still serves its pinned spec, so behaviour has not changed; what "
-            "changed is that a retrain would now learn something different.")
+            "UNVERIFIABLE  no feature_definition_fingerprint tag, so nothing can be "
+            "compared against training. Present objects are all that was checked. Tag "
+            "the version (versioning.training_tags) to get a baseline from now on.")
 
     return {
         "model_uri": model_uri,
         "spec_hash": spec_hash(spec),
         "fingerprint_now": now,
+        "table_fingerprint": table_fingerprint_hash(fp),
+        "function_fingerprint": function_fingerprint_hash(fp),
         "fingerprint_at_training": recorded_fingerprint,
         "tables": spec_tables(spec),
         "functions": spec_functions(spec),
         "missing_tables": missing_tables,
         "missing_functions": missing_funcs,
-        "ok": not findings,
+        "status": status,
+        "ok": status == "ok",
         "findings": findings,
     }
 
@@ -228,6 +286,7 @@ def render_drift(report: dict) -> str:
             f"  spec        {report['spec_hash']}\n"
             f"  definitions {report['fingerprint_at_training'] or '(not tagged)'}"
             f" -> {report['fingerprint_now']}")
+    head += f"\n  status      {report.get('status', 'unknown')}"
     if report["ok"]:
         return head + "\n  OK       every table and function the spec pins is present and unchanged"
     return head + "\n  " + "\n  ".join(report["findings"])

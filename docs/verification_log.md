@@ -482,3 +482,64 @@ Fix: build the example from `training_set.load_df()` and then cast each column t
 dtype its **Spark** type implies (`bigint → Int64`, `double → float64`). The traceback
 names `mlflow/pyfunc/__init__.py` inside a Python worker rather than the logging cell,
 which is why this is worth writing down.
+
+### V73 · A viewer-only feature set cannot rank titles, and the AUC says so exactly
+
+First successful run of notebook 30 reported **holdout AUC 0.4992** on 3,459 labels —
+random to four decimal places. The cause is structural, not a tuning problem: every
+candidate row of one impression shares the viewer, so seven viewer-grain features give
+the model nothing to discriminate between titles with. The label was unlearnable by
+construction.
+
+Fix: five title-grain features (`entity=["title_id"]` — event count, watch seconds,
+distinct viewers over 7d and 30d), and one `create_training_set` call resolves both
+grains because the label frame carries both keys. That is also the more useful
+demonstration: **a Feature View's entity is per definition, and features at different
+grains compose in one training set.**
+
+Worth stating plainly because it is the kind of number a demo can hide: an AUC of 0.4992
+is the honest output of asking a model a question it has no information to answer.
+
+### V74 · `materialize_features` is not idempotent, and its table naming is not literal
+
+Three separate facts, each from a run:
+
+1. **Re-running fails.** A second call for the same feature raises
+   `ResourceAlreadyExists: Materialized features already exist for features '...'`, which
+   took down a re-run of notebook 30 outright. `FV.materialize_new` now skips what is
+   already materialized — from `fe.list_materialized_features()`, and, if the API still
+   objects, from the names in the error itself, retried once with the remainder.
+2. **`table_name_prefix` is a prefix, not a name.** The offline table came back as
+   `fv_viewer_c7klmw` — the platform appends a generated suffix — beside an internal
+   `fv_viewer_c7klmw_partial_aggregates`.
+3. **One table per (entity, window) grouping, not one per call.** The first
+   materialization of seven features produced a table carrying only the three 24h
+   columns; the 7d and 30d groups land separately.
+
+Consequence for verification: the original wait loop stopped as soon as any table
+matching the prefix had rows, so it reported success on a partial materialization **and**
+on a missing online copy. It now enumerates `list_materialized_features()`, waits on the
+offline tables and the FOREIGN online tables separately, prints each table's feature
+columns, and says `NONE YET` explicitly rather than passing when the online side has not
+arrived.
+
+### V75 · Deriving a feature list by exclusion produced two bugs in one run
+
+`crfs_gpu_train` failed with `ValueError: could not convert string to float: 'sci_fi'`,
+forty frames deep in a pandas cast. Notebook 32 had derived its numeric feature list as
+"every column not in a hardcoded NON_FEATURES set", while notebook 22 carries a curated
+list. That shortcut produced two defects at once:
+
+* `last_primary_genre` is a **string** and belongs in the categorical list — the crash;
+* `last_event_epoch_s` and `vr_last_click_epoch_s` would have been fed to the model as
+  **numbers**, where they are a proxy for calendar date and poison anything trained in
+  one window and served in another — silent, and worse than the crash.
+
+Fix: `rails.model_columns()` holds the taxonomy once (44 numeric, 3 categorical, 10
+deliberately-neither) with both rules written where the lists are, and notebook 32 and
+`ai/train_entrypoint.py` read it. `check_model_columns` reports columns the frame carries
+that nobody claimed, so a new feature going unused is visible. `build_encoder` now names
+the offending column instead of letting pandas raise from inside a cast.
+
+**The general lesson, twice now:** a list derived by exclusion silently absorbs whatever
+gets added upstream. The curated list is the one that fails loudly.

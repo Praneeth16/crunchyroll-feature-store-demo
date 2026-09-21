@@ -19,7 +19,6 @@ The published online tables are read-only. Never write to them -- the sync
 pipeline owns them and a manual write breaks it.
 """
 import time
-import datetime as dt
 
 CRED_API = "/api/2.0/postgres/credentials"
 TOKEN_TTL_S = 50 * 60

@@ -8,11 +8,17 @@ unproven. This is the proof, on the axis that matters for a ranker: the same tra
 set, a model that trains in minibatches on an accelerator, and the same
 `fe.log_model` contract so nothing downstream changes.
 
-Two things it deliberately does NOT do:
+What it does, precisely -- the earlier version of this docstring overclaimed and the
+distinction matters:
 
-  * **It does not collect the training set to the driver.** `training_set.load_df()`
-    is written to Parquet on a UC volume and streamed back in minibatches, so the
-    memory ceiling is the batch, not the dataset.
+  * **The Spark side never collects.** `training_set.load_df()` is written straight to
+    Parquet on a UC volume, so the point-in-time join's output never passes through the
+    driver as pandas. That is the part that failed before: `toPandas()` on the full join
+    is what put notebook 22 on a 25% sample.
+  * **The training side reads that Parquet.** `train()` loads it as one frame, which is
+    correct at this demo's size and is *not* out-of-core. `train_streaming()` is the
+    out-of-core path: it encodes and steps per Parquet batch, so its ceiling is the
+    batch. Pass `streaming=True` to use it. Neither is dressed up as the other.
   * **It does not change the serving contract.** The wrapper's `predict` takes the
     same request shape and returns the same three columns as the sklearn rail ranker,
     and the model is logged with its feature spec, so automatic feature lookup and
@@ -173,7 +179,8 @@ def train(parquet_path: str,
           hidden=(256, 128),
           holdout_frac: float = 0.2,
           log_mlflow: bool = True,
-          checkpoint_dir: str = None) -> dict:
+          checkpoint_dir: str = None,
+          streaming: bool = False) -> dict:
     """Fit the ranker on whatever accelerator is present and return the artifacts.
 
     Returns a dict with `state_dict`, the encoder, the metrics and the device used, so
@@ -185,17 +192,34 @@ def train(parquet_path: str,
     import torch.nn as nn
     from sklearn.metrics import roc_auc_score
 
+    if streaming:
+        return train_streaming(
+            parquet_path, feature_cols, categorical, label=label, weight_col=weight_col,
+            epochs=epochs, batch_size=batch_size, lr=lr, hidden=hidden,
+            holdout_frac=holdout_frac, log_mlflow=log_mlflow,
+            checkpoint_dir=checkpoint_dir)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     started = time.perf_counter()
 
     pdf = load_frame(parquet_path)
-    # Time-ordered split where a timestamp exists. A random split leaks the future
-    # through the very windows these features aggregate.
-    ts_col = next((c for c in ("event_ts", "ts", "impression_ts") if c in pdf.columns), None)
-    if ts_col:
-        pdf = pdf.sort_values(ts_col)
+    # Time-ordered split, and a timestamp is REQUIRED rather than nice to have. Without
+    # one this used physical Parquet row order, which Spark does not guarantee -- so the
+    # "holdout" was an arbitrary subset while the log said it was temporal. A random or
+    # arbitrary split also leaks the future through the very windows these features
+    # aggregate, which is the whole reason the split is time-ordered.
+    ts_col = next((c for c in ("event_ts", "ts", "impression_ts", "request_epoch_s")
+                   if c in pdf.columns), None)
+    if ts_col is None:
+        raise ValueError(
+            "the exported training set has no timestamp column (looked for event_ts, ts, "
+            f"impression_ts, request_epoch_s; it has {sorted(pdf.columns)[:12]}...). A "
+            "time-ordered holdout is not possible without one -- re-export carrying the "
+            "label timestamp.")
+    pdf = pdf.sort_values(ts_col)
     cut = int(len(pdf) * (1.0 - holdout_frac))
     tr, te = pdf.iloc[:cut], pdf.iloc[cut:]
+    print(f"split on {ts_col}: train {len(tr)} | holdout {len(te)}")
 
     enc = build_encoder(tr, feature_cols, categorical)
     Xtr = encode(tr, feature_cols, categorical, enc)
@@ -284,3 +308,117 @@ def _checkpoint(model, checkpoint_dir: str, epoch: int):
 def summary(result: dict) -> str:
     return json.dumps({k: v for k, v in result.items()
                        if k not in ("state_dict", "encoder", "history")}, default=str)
+
+
+def train_streaming(parquet_path: str,
+                    feature_cols,
+                    categorical,
+                    label: str = "engaged",
+                    weight_col: str = None,
+                    epochs: int = 8,
+                    batch_size: int = 65_536,
+                    lr: float = 1e-3,
+                    hidden=(256, 128),
+                    holdout_frac: float = 0.2,
+                    log_mlflow: bool = True,
+                    checkpoint_dir: str = None) -> dict:
+    """The out-of-core path: never hold the dataset, only a batch.
+
+    `train()` is the right choice at this demo's size and is what notebook 32 runs. This
+    exists because the claim "the memory ceiling is the batch" has to be true of some code
+    path, and pointing at an unused `iter_batches` was not good enough.
+
+    Two compromises it makes, stated rather than hidden:
+
+      * **The encoder is fitted on the first pass's first batches.** A true streaming fit
+        would need a second pass or running moments; this takes the first
+        `encoder_batches` worth of rows, which is fine for standardisation and wrong for a
+        heavily ordered file.
+      * **The holdout is the tail by time.** The file is sorted on export, so the last
+        `holdout_frac` of batches is the temporal holdout, evaluated batch by batch.
+    """
+    import numpy as np
+    import torch
+    import torch.nn as nn
+    from sklearn.metrics import roc_auc_score
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    started = time.perf_counter()
+
+    batches = list(range(sum(1 for _ in iter_batches(parquet_path, batch_size))))
+    n_batches = len(batches)
+    if n_batches < 2:
+        # One batch is not a stream; fall back rather than pretend, and say so.
+        print(f"only {n_batches} batch at size {batch_size}; using the in-memory path")
+        return train(parquet_path, feature_cols, categorical, label=label,
+                     weight_col=weight_col, epochs=epochs, batch_size=batch_size, lr=lr,
+                     hidden=hidden, holdout_frac=holdout_frac, log_mlflow=log_mlflow,
+                     checkpoint_dir=checkpoint_dir, streaming=False)
+    cut = max(1, int(n_batches * (1.0 - holdout_frac)))
+
+    enc = None
+    model = opt = None
+    lossf = nn.BCEWithLogitsLoss(reduction="none")
+    history = []
+    for epoch in range(epochs):
+        total, seen = 0.0, 0
+        for i, frame in enumerate(iter_batches(parquet_path, batch_size)):
+            if i >= cut:
+                break
+            if enc is None:
+                enc = build_encoder(frame, feature_cols, categorical)
+                model = make_mlp(len(feature_cols) + len(categorical), hidden=hidden).to(device)
+                opt = torch.optim.AdamW(model.parameters(), lr=lr)
+            X = torch.from_numpy(encode(frame, feature_cols, categorical, enc)).to(device)
+            y = torch.from_numpy(frame[label].astype("float32").to_numpy()).to(device)
+            wt = (torch.from_numpy(frame[weight_col].astype("float32").to_numpy()).to(device)
+                  if weight_col and weight_col in frame else torch.ones_like(y))
+            model.train()
+            opt.zero_grad(set_to_none=True)
+            loss = (lossf(model(X).squeeze(-1), y) * wt).mean()
+            loss.backward()
+            opt.step()
+            total += float(loss.detach()) * len(frame)
+            seen += len(frame)
+
+        model.eval()
+        probs, ys = [], []
+        for i, frame in enumerate(iter_batches(parquet_path, batch_size)):
+            if i < cut:
+                continue
+            X = torch.from_numpy(encode(frame, feature_cols, categorical, enc)).to(device)
+            with torch.no_grad():
+                probs.append(torch.sigmoid(model(X).squeeze(-1)).cpu().numpy())
+            ys.append(frame[label].astype("float32").to_numpy())
+        y_true = np.concatenate(ys) if ys else np.array([])
+        y_hat = np.concatenate(probs) if probs else np.array([])
+        auc = (float(roc_auc_score(y_true, y_hat))
+               if len(set(y_true.tolist())) > 1 else float("nan"))
+        history.append({"epoch": epoch + 1, "train_loss": total / max(seen, 1),
+                        "holdout_auc": auc})
+        print(f"epoch {epoch + 1}/{epochs}  loss={total / max(seen, 1):0.5f}  "
+              f"holdout_auc={auc:0.4f}  (streaming, {cut}/{n_batches} batches)")
+        if log_mlflow:
+            _log_metrics({"train_loss": total / max(seen, 1), "holdout_auc": auc},
+                         step=epoch + 1)
+        if checkpoint_dir:
+            _checkpoint(model, checkpoint_dir, epoch + 1)
+
+    elapsed = time.perf_counter() - started
+    return {
+        "state_dict": {k: v.cpu() for k, v in model.state_dict().items()},
+        "encoder": enc,
+        "feature_cols": list(feature_cols),
+        "categorical": list(categorical),
+        "n_inputs": len(feature_cols) + len(categorical),
+        "hidden": list(hidden),
+        "device": device,
+        "gpu_name": (torch.cuda.get_device_name(0) if device == "cuda" else None),
+        "history": history,
+        "holdout_auc": history[-1]["holdout_auc"] if history else None,
+        "train_rows": None,          # never counted: the point is not to hold the set
+        "holdout_rows": None,
+        "streaming": True,
+        "batches": n_batches,
+        "seconds": round(elapsed, 1),
+    }

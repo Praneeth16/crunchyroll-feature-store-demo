@@ -343,17 +343,32 @@ elif prev is None:
     print(f"{MODEL} has only one version, so there is nothing to canary against")
 else:
     live = (ep.config.served_entities or [])[0]
-    base = {
-        "name": live.name,
-        "entity_name": live.entity_name,
-        "entity_version": live.entity_version,
-        "scale_to_zero_enabled": False,
-        "min_provisioned_concurrency": live.min_provisioned_concurrency,
-        "max_provisioned_concurrency": live.max_provisioned_concurrency,
-        "workload_type": "CPU",
-    }
+
+
+    def sized(name, version):
+        """Copy the sizing mode the endpoint actually realised.
+
+        `workload_size` and the provisioned-concurrency pair are mutually exclusive in
+        the API, and notebook 23 asks for the explicit pair but falls back to
+        `workload_size` if the workspace rejects it. On a workspace that took the
+        fallback, the concurrency fields are None -- sending them as null while omitting
+        workload_size preserves neither mode, and can reject the update or silently reset
+        capacity on the demo's request-path endpoint.
+        """
+        out = {"name": name, "entity_name": live.entity_name,
+               "entity_version": str(version), "scale_to_zero_enabled": False,
+               "workload_type": live.workload_type or "CPU"}
+        if live.min_provisioned_concurrency is not None:
+            out["min_provisioned_concurrency"] = live.min_provisioned_concurrency
+            out["max_provisioned_concurrency"] = live.max_provisioned_concurrency
+        else:
+            out["workload_size"] = live.workload_size
+        return out
+
+
+    base = sized(live.name, live.entity_version)
     cand_name = f"{cfg.extras['vers_model']}-{prev}"
-    cand = dict(base, name=cand_name, entity_version=str(prev))
+    cand = sized(cand_name, prev)
     body = {
         "served_entities": [base, cand],
         "traffic_config": {"routes": [
@@ -386,7 +401,10 @@ def wait_config(timeout_s=1800):
     raise TimeoutError(f"{ENDPOINT} config update did not settle in {timeout_s}s")
 
 
-if canary["candidate"] is not None and cfg.extras["run_canary"].strip().lower() == "true":
+# Everything after the split PUT runs inside try/finally. If wait_config() times out or
+# route handling raises, the endpoint would otherwise be left sending 10% of the
+# homepage's traffic to a candidate version with nothing to put it back.
+def measure_split():
     e = wait_config()
     routes = [(r.served_entity_name, r.traffic_percentage)
               for r in ((e.config.traffic_config.routes if e.config and e.config.traffic_config else None) or [])]
@@ -405,37 +423,36 @@ if canary["candidate"] is not None and cfg.extras["run_canary"].strip().lower() 
             print("  request failed:", type(ex).__name__, str(ex)[:120])
     print(f"{oks}/10 requests answered while the split was live")
     canary["requests_ok"] = oks
-results["canary"] = canary
-# COMMAND ----------
-# MAGIC %md
-# MAGIC ### Restore 100% to the pinned version
-# MAGIC
-# MAGIC The demo's request-path endpoint is left exactly as notebook 23 configured it.
-# COMMAND ----------
-if canary.get("ran"):
-    live = (ep.config.served_entities or [])[0]
-    restore_body = {
-        "served_entities": [{
-            "name": live.name,
-            "entity_name": live.entity_name,
-            "entity_version": live.entity_version,
-            "scale_to_zero_enabled": False,
-            "min_provisioned_concurrency": live.min_provisioned_concurrency,
-            "max_provisioned_concurrency": live.max_provisioned_concurrency,
-            "workload_type": "CPU",
-        }],
+
+
+def restore_single_version():
+    """Put the endpoint back to one pinned version at 100%. Runs unconditionally."""
+    w.api_client.do("PUT", f"/api/2.0/serving-endpoints/{ENDPOINT}/config", body={
+        "served_entities": [sized(live.name, live.entity_version)],
         "traffic_config": {"routes": [{"served_entity_name": live.name,
                                        "traffic_percentage": 100}]},
-    }
-    w.api_client.do("PUT", f"/api/2.0/serving-endpoints/{ENDPOINT}/config", body=restore_body)
+    })
     e = wait_config()
     routes = [(r.served_entity_name, r.traffic_percentage)
               for r in ((e.config.traffic_config.routes if e.config and e.config.traffic_config else None) or [])]
     print("restored routes:", routes)
     assert routes == [(live.name, 100)], f"endpoint left in an unexpected state: {routes}"
     canary["restored"] = True
+
+
+if canary["candidate"] is not None and cfg.extras["run_canary"].strip().lower() == "true":
+    try:
+        measure_split()
+    finally:
+        restore_single_version()
+results["canary"] = canary
 # COMMAND ----------
 # MAGIC %md
+# MAGIC ### The endpoint is left exactly as notebook 23 configured it
+# MAGIC
+# MAGIC The restore above runs in the `finally`, so this holds even if the measurement
+# MAGIC failed. Verified by reading the routes back and asserting, not by assuming.
+# COMMAND ----------
 # MAGIC ## 7 · Which models would a change affect?
 # MAGIC
 # MAGIC Before touching a definition, this is the question to answer, and Unity Catalog
@@ -448,43 +465,58 @@ models = [m.name for m in mc.search_registered_models(filter_string=f"catalog='{
 print(f"{len(models)} registered models in {cfg.fq}\n")
 
 fleet = []
+pins = {}
+
 for name in sorted(models):
+    short = name.split(".")[-1]
     try:
         vs = sorted((int(v.version) for v in mc.search_model_versions(f"name='{name}'")),
                     reverse=True)
-        if not vs:
-            continue
-        uri = f"models:/{name}/{vs[0]}"
-        tag = dict(mc.get_model_version(name, str(vs[0])).tags or {}).get(V.TAG_FINGERPRINT)
-        rep = V.drift_report(spark, uri, recorded_fingerprint=tag)
-        fleet.append({"model": name.split(".")[-1], "version": vs[0],
-                      "tables": len(rep["tables"]), "functions": len(rep["functions"]),
-                      "ok": rep["ok"], "findings": rep["findings"]})
+    except Exception as e:
+        fleet.append({"model": short, "version": None, "tables": 0, "functions": 0,
+                      "ok": None, "findings": [f"{type(e).__name__}: {str(e)[:100]}"]})
+        continue
+    if not vs:
+        continue
+    uri = f"models:/{name}/{vs[0]}"
+    try:
+        # One download per model. The first version of this cell called
+        # feature_spec_of() here and again in a second loop to build the reverse index,
+        # which downloaded every model's artifacts twice.
+        s = V.feature_spec_of(uri)
     except ValueError as e:
-        # A model logged without fe.log_model has no spec. That is a real distinction --
-        # it means the caller has to supply features itself -- so it is reported.
-        fleet.append({"model": name.split(".")[-1], "version": vs[0] if vs else None,
-                      "tables": 0, "functions": 0, "ok": None,
-                      "findings": [str(e)[:120]]})
+        # A model logged with mlflow.pyfunc rather than fe.log_model has no spec. That is
+        # a real distinction -- the caller has to supply features itself -- so it is
+        # reported rather than skipped.
+        fleet.append({"model": short, "version": vs[0], "tables": 0, "functions": 0,
+                      "ok": None, "findings": [str(e)[:120]]})
+        continue
+
+    tag = dict(mc.get_model_version(name, str(vs[0])).tags or {}).get(V.TAG_FINGERPRINT)
+    fp = V.definition_fingerprint(spark, s)
+    missing_t = [k for k, v in fp["tables"].items() if v is None]
+    missing_f = [k for k, v in fp["functions"].items() if v is None]
+    findings = ([f"BROKEN table {k}" for k in missing_t]
+                + [f"BROKEN function {k}" for k in missing_f])
+    now = V.fingerprint_hash(fp)
+    if tag and tag != now and not findings:
+        findings.append(f"CHANGED definitions since training ({tag} -> {now})")
+    fleet.append({"model": short, "version": vs[0],
+                  "tables": len(V.spec_tables(s)), "functions": len(V.spec_functions(s)),
+                  "ok": not findings, "findings": findings})
+    for obj in V.spec_tables(s) + V.spec_functions(s):
+        pins.setdefault(obj, []).append(short)
 
 print(f"{'model':34s} {'ver':>4s} {'tables':>7s} {'funcs':>6s}  status")
 for r in fleet:
-    status = "no feature spec" if r["ok"] is None else ("ok" if r["ok"] else r["findings"][0][:60])
+    status = ("no feature spec" if r["ok"] is None
+              else ("ok" if r["ok"] else r["findings"][0][:60]))
     print(f"{r['model']:34s} {str(r['version']):>4s} {r['tables']:>7d} {r['functions']:>6d}  {status}")
 
-# Which objects the whole fleet depends on, i.e. what is unsafe to change in place.
-pins = {}
-for name in sorted(models):
-    try:
-        vs = sorted((int(v.version) for v in mc.search_model_versions(f"name='{name}'")), reverse=True)
-        s = V.feature_spec_of(f"models:/{name}/{vs[0]}")
-        for obj in V.spec_tables(s) + V.spec_functions(s):
-            pins.setdefault(obj, []).append(name.split(".")[-1])
-    except Exception:
-        continue
-print("\nwho pins what:")
+print("\nwho pins what -- this is the answer to 'what breaks if I change this':")
 for obj, users in sorted(pins.items(), key=lambda kv: (-len(kv[1]), kv[0])):
-    print(f"  {obj.split('.')[-1]:34s} {len(users)}  {', '.join(sorted(users))}")
+    print(f"  {obj.split('.')[-1]:34s} {len(users)}  {', '.join(sorted(set(users)))}")
+results["pins"] = {k.split('.')[-1]: sorted(set(v)) for k, v in pins.items()}
 results["fleet"] = fleet
 results["pins"] = {k.split('.')[-1]: v for k, v in pins.items()}
 # COMMAND ----------

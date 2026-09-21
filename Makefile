@@ -148,7 +148,13 @@ cost: ## Daily DBU and list USD for the online store and the serving endpoints
 verify: ## Assert the demo is in a good state
 	@./scripts/verify.sh $(PROFILE)
 
-teardown-cost: deploy ## Delete endpoints, the app and the online store. Keep all data.
+# NOT `teardown-cost: deploy`. In a partially torn-down workspace a deploy can fail --
+# recreating the app against an endpoint or Lakebase resource that is already gone -- and
+# a failed prerequisite means the teardown never runs while the always-on online store
+# keeps billing. The whole point of this target is to stop the meter, so it must not
+# depend on anything that can fail first. `bundle run` uses whatever the workspace
+# already has.
+teardown-cost: ## Delete endpoints, the app and the online store. Keep all data.
 	$(BUNDLE) run crfs_teardown $(FLAGS)
 
 teardown: ## Full teardown including UC tables and models. Destructive.

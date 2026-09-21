@@ -126,6 +126,47 @@ for the rail-grain layer. The honest recommendation: author *new* aggregate feat
 declaratively, leave procedural features where they are, and do not rewrite a working
 feature table to prove a point.
 
+## What materialization actually creates
+
+Measured, because none of it is guessable from the arguments you pass:
+
+```
+fe.materialize_features(features=[12 features],
+                        offline_config=OfflineStoreConfig(table_name_prefix="fv_viewer"),
+                        online_config=OnlineStoreConfig(table_name_prefix="fv_viewer_online",
+                                                        online_store_name=<existing store>),
+                        trigger=TableTrigger())
+```
+
+produced, on this workspace:
+
+| Object | Rows | What it is |
+|---|---|---|
+| `fv_viewer_c7klmw` | 30,798 | offline feature table for one (entity, window) group |
+| `fv_viewer_c7klmw_latest_view` | 1 | latest-per-key view over it |
+| `fv_viewer_online_c7klmw` | 1 | the online copy, a FOREIGN table in the Lakebase store |
+| `fv_viewer_z4kad0` | 19,655 | offline table for the next group |
+| `fv_viewer_z4kad0_latest_view` | 297 | its latest-per-key view |
+| `fv_viewer_online_z4kad0` | 297 | its online copy |
+| `*_partial_aggregates` | — | internal intermediates, one per group |
+
+Four facts worth carrying:
+
+* **`table_name_prefix` is a prefix.** The platform appends a generated suffix, so you
+  cannot predict the table name and should not hardcode it.
+* **One group of tables per (entity, window) grouping**, not one per call. Twelve features
+  across two grains and three window shapes did not produce one table.
+* **`list_materialized_features` is per feature**, and its `feature_name` keyword is
+  required — calling it without one raises a `TypeError` that reads like "nothing is
+  materialized" if the exception is swallowed.
+* **It is not idempotent.** A second call for the same feature raises
+  `ResourceAlreadyExists`. `src/crfs/feature_views.py::materialize_new` skips what is
+  already materialized so the notebook can be re-run.
+
+The one-row online table above is not a materialization fault: the 24h-window features
+are empty because this workspace's generated history ended five days earlier, which
+`make verify` reports as a drifted demo clock.
+
 ## What notebook 30 actually does
 
 1. declares seven viewer features over `engagement_events` (24h / 7d / 30d windows),

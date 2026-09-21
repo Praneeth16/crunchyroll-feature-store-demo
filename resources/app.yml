@@ -18,14 +18,13 @@
 # the online tables. Run scripts/grant_app_postgres.sh after deploy, and again after
 # any new publish_table.
 #
-# Only the ranker is declared as a resource. App creation FAILS OUTRIGHT if it
-# references an endpoint that does not exist yet --
+# No endpoint is declared as a resource. App creation FAILS OUTRIGHT if it references
+# an endpoint that does not exist yet --
 #   Error: cannot create resources.apps.crfs_watch_next:
 #   Endpoint with name 'crunchyroll-candidate-retriever' does not exist (404)
-# -- and the retriever, feature-serving and agent endpoints are created by notebooks
-# 08, 07 and 12. Making the app un-deployable until the whole pipeline has run would
-# break `bundle deploy` on a fresh workspace, so those three are granted after the
-# fact by scripts/grant_app_endpoints.sh, which `make deploy-app` runs.
+# -- and every endpoint here is created by a notebook (03, 07, 08, 12, 23), all of which
+# run after the first `bundle deploy`. Declaring any of them makes a fresh workspace
+# undeployable, so scripts/grant_app_endpoints.sh grants them all after the fact.
 resources:
   apps:
     crfs_watch_next:
@@ -36,11 +35,16 @@ resources:
         feature rows and a measured freshness loop on screen.
       source_code_path: ../app
 
+      # NO serving_endpoint resources here, deliberately. App creation validates them,
+      # and on an empty workspace `bundle deploy` runs BEFORE the pipeline that creates
+      # any endpoint -- so declaring even the ranker makes the first deploy fail with
+      #   cannot create resources.apps.crfs_watch_next:
+      #   Endpoint with name '...' does not exist (404)
+      # which breaks the one-command setup this repo advertises. All four endpoints are
+      # granted after the fact by scripts/grant_app_endpoints.sh, which `make deploy-app`
+      # and setup.sh both run. The app reads endpoints by name from its environment, so a
+      # resource entry buys only the grant, and the script does that.
       resources:
-        - name: ranker
-          serving_endpoint:
-            name: ${var.ranker_endpoint}
-            permission: CAN_QUERY
         - name: warehouse
           sql_warehouse:
             id: ${var.warehouse_id}
