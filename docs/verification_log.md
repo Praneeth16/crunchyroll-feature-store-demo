@@ -371,3 +371,114 @@ Tracked honestly rather than assumed. Everything above this line was actually ru
 
 No number from this list appears in the README. When one is measured it goes above, with
 the command that produced it.
+
+## 2026-09-21 — the advanced track and the repo restructure (V67-V74)
+
+Everything in this section was run on `fevm-serverless-lakebase-praneeth` (AWS us-east-1)
+against CLI **v1.17.0**, upgraded from v1.14.1 as part of the work.
+
+### V67 · The app can be a bundle resource again — CLI v1.17.0 fixes the update mask
+
+`docs/risks.md` §8b recorded that v1.14.1 put `forward_user_access_token` in every app
+update mask and this workspace's Apps API rejects it, so `bundle deploy` could create an
+app but never update one. Retested on v1.17.0: `Updated apps.crfs_watch_next`, and
+`bundle run crfs_watch_next` deploys the source and restarts the app (deployment
+`SUCCEEDED`, compute `ACTIVE`). `scripts/deploy_app.sh` is deleted.
+
+Three things the retest cost a deploy each to learn:
+
+1. **An app created outside the bundle must be adopted once.** `bundle deploy` otherwise
+   tries to create it: `409 ALREADY_EXISTS`. Fix:
+   `databricks bundle deployment bind crfs_watch_next crfs-watch-next`.
+2. **In a bundle the field is `value_from`, not app.yaml's `valueFrom`.** The camelCase
+   spelling produces `Warning: Use 'value_from' instead of 'valueFrom'` and is then
+   **ignored** — which would leave the app with no warehouse id while looking configured.
+3. **`app.yaml` had to be deleted, not moved.** Databricks Apps does not expand `${NAME}`
+   inside it, which is why the old script rendered a staging copy before upload — and why
+   one earlier deploy shipped without `RAIL_RANKER_ENDPOINT` and the app silently fell
+   back to a previous workspace's endpoint name. Command and env now live only in
+   `resources/app.yml`, which the bundle substitutes.
+
+**Platform gap worth knowing:** `GET /api/2.0/apps/{name}` does not return `config` at
+all, so the environment an app received cannot be read back. Confirmed here by making the
+app print its own env once at startup — every expected variable was present, including
+`DATABRICKS_WAREHOUSE_ID` resolved from the `value_from` resource reference.
+
+### V68 · A hand-built `--var` list is a single argument under zsh
+
+While verifying the app's environment, `DATABRICKS_CATALOG` came back as
+`serverless_lakebase_praneeth_catalog --var=schema=crunchyroll_demo --var=…` — the entire
+rest of the command line swallowed into one value.
+
+Cause: zsh does not word-split unquoted parameter expansions, so
+`databricks bundle deploy $VARS` passes one argument. `make deploy` is unaffected because
+make expands `$(VARS)` itself. The lesson is narrow but expensive: **drive the bundle
+through the Makefile**, and if a command must be typed by hand, use `${=VARS}` (zsh) or an
+array.
+
+### V69 · Both previews are available here, and the published DSL list is understated
+
+`crfs_preview_probe` (`make probe`), which registers nothing and writes nothing:
+
+* **Feature Views usable.** `fe.compute_features` on a live `Feature` over
+  `engagement_events` returned rows; online store `State.AVAILABLE`.
+* **Serverless GPU usable.** A notebook task with `compute.hardware_accelerator:
+  GPU_1xA10` got an **NVIDIA A10G, 23,028 MiB, driver 580.126.16**, `torch 2.7.1+cu126`,
+  CUDA 12.6, one visible device, a real matmul on the device, and
+  `serverless_gpu.distributed` importable.
+* **The DSL is wider than documented.** The published limitations say "limited list of
+  functions (UDAFs) supported" and show `Sum`, `Avg`, `Count`. The installed package
+  exports **18 aggregation operators** plus `CustomUDF(function_name, input_bindings)`
+  — which binds a **Unity Catalog function**, so this repo's existing `cr_*` UDFs are
+  reusable as feature transformations — plus `RowTransformation` and
+  `FeatureViewSource(features=[...])` for chaining a feature onto other features.
+
+That last point changed the plan: a full migration of the viewer-grain layer is feasible,
+not blocked. It is still not recommended, for the reasons in `docs/feature_views.md`.
+
+### V70 · Two job-shape facts, each one deploy
+
+* A serverless task that sets task-level `compute` **must** also name an environment:
+  `An environment is required for serverless task gpu_probe when compute is set on task
+  level. Please define one using environments and environment_key.`
+* `environment_version` supersedes the deprecated `client` field in an environment spec.
+
+`ai_runtime_task` also exists as a first-class DABs task type for multi-node GPU work
+(`deployments[].command_path` + `compute.accelerator_type` / `accelerator_count`, enums
+`GPU_1xA10` / `GPU_1xH100` / `GPU_8xH100`, exactly one deployment supported in preview).
+This repo does not use it — one A10 trains this model in minutes, and shipping a
+multi-node config nobody has run would be an unverified claim.
+
+### V71 · A locally-defined `Feature` has no catalog or schema
+
+First run of notebook 30 failed at `create_training_set`:
+
+```
+ValueError: Feature does not have a catalog and schema.
+Provide catalog_name and schema_name, or call register_feature().
+```
+
+`register_feature` **returns** a new object carrying the catalog and schema, and that
+returned object is what every later call needs. The notebook was passing the local
+definitions it had built. `FV.register_all` now returns the registered features and is
+idempotent — an already-registered feature is fetched with `fe.get_feature` rather than
+re-registered, so a re-run does not fail on `ALREADY_EXISTS`.
+
+### V72 · `toPandas()` and `score_batch` disagree about a nullable bigint
+
+Second run failed inside a Spark UDF during `fe.score_batch`:
+
+```
+Incompatible input types for column fv_watch_seconds_24h.
+Can not safely convert Int64 to float64.
+```
+
+The model's signature is inferred from the `input_example`, and the two conversions do
+not agree: `toPandas()` widens a nullable `bigint` to `float64` as soon as the sampled
+slice contains a null, while `score_batch` presents the same column as pandas nullable
+`Int64`. So the signature said `double` and the platform handed over `Int64`.
+
+Fix: build the example from `training_set.load_df()` and then cast each column to the
+dtype its **Spark** type implies (`bigint → Int64`, `double → float64`). The traceback
+names `mlflow/pyfunc/__init__.py` inside a Python worker rather than the logging cell,
+which is why this is worth writing down.

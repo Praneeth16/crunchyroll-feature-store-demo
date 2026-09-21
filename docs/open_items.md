@@ -49,7 +49,7 @@ before anyone commits to a latency target.**
 
 ---
 
-## 3 · Not demonstrated: traffic splitting between model versions
+## 3 · Traffic splitting — now demonstrated, still not a rollout process
 
 The ask says "model/version management **and deployment**". This POC pins an immutable
 version and sends it **100%** of traffic. Model Serving supports splitting traffic
@@ -57,22 +57,39 @@ across served entities, and that is how a ranking model should actually be rolle
 a canary on a small share, watched on the inference table, before it takes the homepage.
 
 Promotion and deployment are already two separate steps here (retrain moves
-`@champion`; nothing reaches traffic until notebook 23 runs), so the missing piece is
+`@champion`; nothing reaches traffic until notebook 23 runs), so the missing piece was
 the split itself, not the discipline around it.
+
+**Since:** `notebooks/30_advanced/31_feature_versioning.py` §6 puts two model versions
+behind the endpoint at 90/10, reads the realised routes back, fires requests across the
+split and restores 100% to the pinned version. What is still absent is the *process*
+around it — a metric to judge the canary on, a promotion gate, and an automatic rollback.
+Attribution would come from the inference table, which records the served entity per
+request; nothing in this POC reads it for that purpose.
 
 ---
 
-## 4 · Not demonstrated: training at production volume
+## 4 · Training at production volume — the substitution is now proven, the volume is not
 
 The point-in-time join is Spark and scales. The **estimator does not** — it collects to
 pandas and fits scikit-learn on one driver. Measured here: 363k labels against a
 421k-row time-series table did not finish inside a 60-minute task on two separate runs,
 which is why the demo fits on a 25% session sample.
 
-The substitution is Spark ML or XGBoost/LightGBM on Spark fed from
-`training_set.load_df()` with no collect, and it touches neither the feature layer, the
-feature spec, nor the serving path. That is almost certainly true and it is **unproven
-here** — worth stating as an assertion rather than a demonstration.
+The substitution is an estimator that trains in minibatches rather than in one driver's
+memory, fed from `training_set.load_df()` with no collect, touching neither the feature
+layer, the feature spec, nor the serving path.
+
+**Since:** `notebooks/30_advanced/32_gpu_train.py` does exactly that — the same
+point-in-time training set exported to Parquet on a UC volume, a torch MLP trained on a
+serverless A10 in minibatches, logged with `fe.log_model` so the feature spec still
+travels and the model is a drop-in for the same endpoint. `src/crfs/train_gpu.py` is the
+module; `ai/train.yaml` runs it from a laptop.
+
+What remains unproven is the **volume**, not the mechanism: this still trains on the 25%
+session sample, because the 60-minute ceiling was the point-in-time join and the pandas
+collect together, and only the second of those has been removed. The join is Spark and
+scales; measuring it at Crunchyroll's cardinality is the outstanding test.
 
 ---
 

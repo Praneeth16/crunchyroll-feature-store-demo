@@ -214,6 +214,11 @@ change), `crfs_streaming` (producer ‖ streaming aggregate + CONTINUOUS publish
 | 24 | `notebooks/20_vertical/24_homepage_assembly.py` | `homepage_assembly` (`crfs_vertical`) | A whole homepage from both rankers; shared-table overlap resolved from UC; four-context sensitivity check |
 | 25 | `notebooks/90_ops/25_serving_benchmark.py` | `benchmark` (job `crfs_benchmark`) | fanout, concurrency ramp, traffic spike, feature-serving comparison, server-side attribution |
 | 99 | `notebooks/90_ops/99_teardown.py` | `teardown` (job `crfs_teardown`) | Stop the money, from the UI |
+| 29 | `notebooks/30_advanced/29_preview_probe.py` | `feature_views_probe` (job `crfs_preview_probe`) | Is the Feature Views preview usable on this workspace? Registers nothing |
+| 29b | `notebooks/30_advanced/29b_gpu_probe.py` | `gpu_probe` (`crfs_preview_probe`) | What accelerator does a GPU task actually get? |
+| 30 | `notebooks/30_advanced/30_feature_views.py` | `feature_views` (job `crfs_feature_views`) | Declarative authoring: declare, register, train from, score, materialize |
+| 31 | `notebooks/30_advanced/31_feature_versioning.py` | `versioning` (job `crfs_versioning`) | What a deployed version pins; the in-place-function experiment; a canary |
+| 32 | `notebooks/30_advanced/32_gpu_train.py` | `gpu_train` (job `crfs_gpu_train`) | Torch on a serverless A10, same training set, same feature spec |
 
 Task keys matter in practice: a failure on the run page names the task, and
 `databricks bundle run crfs_end_to_end --only <task_key>` re-runs just that one.

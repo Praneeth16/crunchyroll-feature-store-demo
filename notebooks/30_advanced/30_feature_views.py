@@ -144,11 +144,21 @@ labels = (spark.table(cfg.t("engagement_events"))
 n_labels = labels.count()
 print(f"labels: {n_labels} ({FRAC:.0%} of the impression log)")
 
+# `viewer_id` and `title_id` stay IN, and only the point-in-time key is excluded.
+# predict() reads both -- it ranks within viewer and returns title_id -- and
+# exclude_columns removes a column from the training set AND from what the endpoint
+# hands the model. Excluding them makes every row fall into one group, so the ranking
+# silently becomes global instead of per-viewer. Notebook 22 keeps its keys for the
+# same reason, and docs/verification_log.md records the retriever failing UC
+# registration over exactly this.
+#
+# They are not features: encode() reads FEATURE_COLS + context + categorical only, so
+# an id cannot reach the model.
 training_set = fe.create_training_set(
     df=labels,
     features=features,
     label="engaged",
-    exclude_columns=["viewer_id", "title_id", "event_ts"],
+    exclude_columns=["event_ts"],
 )
 train_df = training_set.load_df()
 print("training columns:", train_df.columns)
@@ -176,6 +186,10 @@ from sklearn.metrics import roc_auc_score
 FEATURE_COLS = [f.name for f in features]
 CONTEXT_NUM = ["hour_of_day"]
 CATEGORICAL = ["surface", "device", "locale"]
+# viewer_id and title_id are in the frame (predict needs them to rank within viewer and
+# to label its output) but are deliberately absent from all three lists above, so they
+# are carried, not learned from.
+IDS = ["viewer_id", "title_id"]
 
 # Time-ordered split. A random split on an impression log leaks the future into the
 # training set through the very windows these features aggregate.
@@ -289,11 +303,29 @@ _probe.load_context(_LocalCtx())
 #   Can not safely convert Int64 to float64.
 # Round-tripping the example through `load_df().toPandas()` is the same conversion
 # `score_batch` performs, so the signature and the served frame agree by construction.
-_serving_like = (training_set.load_df()
-                 .drop("engaged")
-                 .limit(24)
-                 .toPandas())
-print("example dtypes, as Spark delivers them:")
+_example_sdf = training_set.load_df().drop("engaged")
+_serving_like = _example_sdf.limit(24).toPandas()
+
+# Now coerce to the dtypes the SERVING path will actually present. Two conversions
+# disagree and the signature has to match the second one:
+#
+#   toPandas()   widens a nullable bigint to float64 as soon as the slice contains a
+#                null -- so an example built this way types a Sum() feature as double
+#   score_batch  delivers the same column as pandas nullable Int64
+#
+# and mlflow refuses the mismatch at scoring time with
+#   Incompatible input types for column fv_watch_seconds_24h.
+#   Can not safely convert Int64 to float64.
+# which surfaces inside a Spark UDF, so the traceback names mlflow rather than this cell.
+# Reading the Spark schema and casting to Int64 makes the logged signature agree with
+# what the platform hands the model.
+_SPARK_TO_PANDAS = {"bigint": "Int64", "int": "Int32", "smallint": "Int16",
+                    "double": "float64", "float": "float32", "boolean": "boolean"}
+for _f in _example_sdf.schema.fields:
+    _target = _SPARK_TO_PANDAS.get(_f.dataType.simpleString())
+    if _target and _f.name in _serving_like.columns:
+        _serving_like[_f.name] = _serving_like[_f.name].astype(_target)
+print("example dtypes, matched to the Spark schema:")
 print(_serving_like.dtypes.to_string())
 for label, frame in [("one row", _serving_like.head(1)),
                      ("one viewer, many titles", _serving_like.head(12)),

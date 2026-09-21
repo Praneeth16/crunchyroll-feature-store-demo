@@ -167,3 +167,37 @@ Not padding — each one exists because the ask could not be answered honestly w
 * **A verification log.** `docs/verification_log.md` records 66 checks, and most of them are
   defects that only a live run surfaced — including several corrections to earlier
   claims.
+
+---
+
+## Added after the readout: the four follow-up questions
+
+The team came back with three requests for boilerplate and one design question. Same
+standard as everything above: each row names the artifact that proves it, and anything
+that stands on a Public Preview API says so.
+
+| Element of the ask | Status | Evidence |
+|---|---|---|
+| **How to use Feature Views for training** | met | `notebooks/30_advanced/30_feature_views.py` + `src/crfs/feature_views.py`. Seven viewer aggregates declared, registered in UC, and `fe.create_training_set(df=labels, features=[...])` — **no table name and no join in the training code**. `make feature-views` |
+| **Job for GPU based training** | met | `resources/jobs_advanced.yml` → `crfs_gpu_train`: a notebook task with `compute.hardware_accelerator: GPU_1xA10` and a paired `environment_key`. `make gpu-train` |
+| **AI Runtime for serverless GPU** | met | `notebooks/30_advanced/32_gpu_train.py` trains through `serverless_gpu.distributed`; `ai/train.yaml` + `ai/train_entrypoint.py` submit the **same module** from a laptop with the `air` CLI. Measured here: NVIDIA A10G, 23 GB, torch 2.7.1+cu126 |
+| **Decoupling a feature-definition change between training and inference** | met, and the finding is asymmetric | `notebooks/30_advanced/31_feature_versioning.py` measures it against the live endpoint: table lookups are **pinned** inside the model version, on-demand UC functions are **resolved by name per request**. So a table rebuild is safe and `CREATE OR REPLACE FUNCTION` is a production change with no deploy. `docs/feature_versioning.md` |
+| **Versioning for feature definitions** | met, as a discipline rather than a platform feature | Neither feature tables nor Feature Views carry a version number. What exists: the feature spec inside each model version, plus two tags this repo adds (`feature_spec_hash`, `feature_definition_fingerprint`) and `src/crfs/versioning.py` to read, fingerprint and diff them. Version **by name**, additively |
+| A repo the team can navigate | met | `QUICKSTART.md`, `docs/README.md` as an index, notebooks grouped into seven tracks, and a README that is a landing page rather than a manual |
+| One-click deploy with DABs | met | `make deploy` is the whole deploy — jobs, volume, dashboard **and the app**, which became possible on CLI v1.17.0 (`docs/risks.md` §8b). `./setup.sh --profile <P>` still does empty-workspace-to-demo in one command |
+
+### What we did not do, and why
+
+* **The pipeline was not migrated to Feature Views.** The DSL covers the viewer-grain
+  aggregates and, with `CustomUDF` / `RowTransformation` / `FeatureViewSource` chaining,
+  more than the published limitations suggest — but `rail_features`,
+  `viewer_rail_features_ts` and the propensity model are procedural, and rewriting a
+  working feature table to prove a point is not an improvement.
+  `docs/feature_views.md` has the feature-by-feature table.
+* **Neither preview is available in GCP us-west1.** Feature Views and AI Runtime are both
+  AWS-region-limited today, which is the same constraint as Lakebase. For Crunchyroll's
+  own region these are roadmap, and `make probe` is how any workspace answers the question
+  for itself.
+* **The GPU model was not promoted.** It is registered and aliased `@challenger`, not
+  `@champion`. It exists to show that the estimator can be swapped without touching the
+  feature layer or the serving contract, not to claim a better ranker on synthetic labels.

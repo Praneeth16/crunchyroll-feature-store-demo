@@ -18,7 +18,10 @@
 #   --store NAME       online feature store name (default: crunchyroll-online-store)
 #   --capacity CU_n    online store capacity class (default: CU_1)
 #   --target dev|prod  bundle target (default: dev)
-#   --stage NAME       run one stage only: bootstrap|deploy|data|vertical|serve|app|bench|verify
+#   --stage NAME       run one stage only: bootstrap|deploy|data|vertical|serve|app|
+#                      advanced|bench|verify
+#   --with-advanced    also run the preview track: Feature Views and feature versioning
+#   --with-gpu         --with-advanced plus GPU training (bills accelerator minutes)
 #   --skip-bench       skip the load test (it puts real traffic on the endpoint)
 #   --skip-app         skip the Databricks App
 #   --yes              do not ask before creating billable infrastructure
@@ -27,6 +30,9 @@ cd "$(dirname "$0")"
 
 PROFILE=""; CATALOG=""; SCHEMA="crunchyroll_demo"; STORE="crunchyroll-online-store"
 CAPACITY="CU_1"; TARGET="dev"; STAGE=""; SKIP_BENCH=0; SKIP_APP=0; ASSUME_YES=0
+# The advanced track is opt-in: both of its APIs are Public Preview, and the GPU job
+# bills accelerator minutes. Nothing about the demo depends on either.
+WITH_ADVANCED=0; WITH_GPU=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -37,6 +43,8 @@ while [ $# -gt 0 ]; do
     --capacity)   CAPACITY="$2"; shift 2 ;;
     --target)     TARGET="$2"; shift 2 ;;
     --stage)      STAGE="$2"; shift 2 ;;
+    --with-advanced) WITH_ADVANCED=1; shift ;;
+    --with-gpu)      WITH_ADVANCED=1; WITH_GPU=1; shift ;;
     --skip-bench) SKIP_BENCH=1; shift ;;
     --skip-app)   SKIP_APP=1; shift ;;
     --yes|-y)     ASSUME_YES=1; shift ;;
@@ -162,6 +170,27 @@ if want app && [ "$SKIP_APP" != "1" ]; then
   ./scripts/grant_app_uc.sh "$PROFILE" || note "UC grants failed; every Delta-backed panel will come back empty"
 fi
 
+# ------------------------------------------------------------------ advanced
+# Public Preview APIs, so this probes first and reports rather than dying: a workspace
+# without the previews should not fail a setup whose GA demo is complete.
+if want advanced && [ "$WITH_ADVANCED" = "1" ]; then
+  step "6b/8  Advanced track (Public Preview APIs)"
+  note "probing for Feature Views and serverless GPU before using either"
+  if "$DB" bundle run crfs_preview_probe "${BUNDLE[@]}"; then
+    "$DB" bundle run crfs_feature_views "${BUNDLE[@]}" || note "crfs_feature_views failed -- see the run page"
+    "$DB" bundle run crfs_versioning "${BUNDLE[@]}"    || note "crfs_versioning failed -- see the run page"
+    if [ "$WITH_GPU" = "1" ]; then
+      note "training on a serverless A10 -- this bills accelerator minutes"
+      "$DB" bundle run crfs_gpu_train "${BUNDLE[@]}" || note "crfs_gpu_train failed -- see the run page"
+    else
+      note "skipping GPU training; pass --with-gpu to include it"
+    fi
+  else
+    note "the preview probe failed, so the advanced track was skipped. Run"
+    note "'make probe' for what this workspace is missing."
+  fi
+fi
+
 # ----------------------------------------------------------------- benchmark
 if want bench && [ "$SKIP_BENCH" != "1" ]; then
   step "7/8  Benchmarking the rail-ranking endpoint, in region"
@@ -196,6 +225,7 @@ if [ -z "$STAGE" ]; then
       make bench-local PROFILE=$PROFILE   # the same benchmark from this laptop, for contrast
       make verify      PROFILE=$PROFILE
       make cost        PROFILE=$PROFILE
+      make probe       PROFILE=$PROFILE   # is the preview track available here?
       make teardown-cost PROFILE=$PROFILE # stop the meter, keep the data
 EOF
 fi
