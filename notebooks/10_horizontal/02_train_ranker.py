@@ -31,6 +31,7 @@ assert os.path.isdir(os.path.join(_root, "src", "crfs")), \
 if _root not in sys.path:
     sys.path.insert(0, _root)
 from src.crfs.config import Config
+from src.crfs import rails as R
 
 cfg = Config.from_widgets(dbutils)
 CATALOG, SCHEMA = cfg.catalog, cfg.schema
@@ -96,11 +97,15 @@ cutoff = pd.to_datetime(events.agg({"event_ts": "max"}).first()[0]) - pd.Timedel
 train_labels = labels_sdf.filter(labels_sdf["ts"] <= cutoff)
 test_labels = labels_sdf.filter(labels_sdf["ts"] > cutoff)
 
-lookups = [
-    FeatureLookup(table_name=f"{CATALOG}.{SCHEMA}.viewer_features_current", lookup_key="viewer_id"),
-    FeatureLookup(table_name=f"{CATALOG}.{SCHEMA}.recent_behavior_current", lookup_key="viewer_id"),
-    FeatureLookup(table_name=f"{CATALOG}.{SCHEMA}.title_features", lookup_key="title_id"),
-]
+# Point-in-time, from rails.title_lookups so the two rankers share one definition of the
+# two viewer tables. These used to be the _current tables with no timestamp, which joined
+# every historical label to today's values -- and `title_features.popularity_30d` aggregates
+# engagement, this model's own label, so a holdout impression's play sat inside the
+# popularity of the title it was shown for. Same defect as the rail ranker's
+# rail_ctr_30d (verification_log V76).
+lookups = R.title_lookups(cfg)
+for _lk in lookups:
+    print(f"  lookup {_lk.table_name.split('.')[-1]:24s} as-of={_lk.timestamp_lookup_key}")
 training_set = fe.create_training_set(
     df=train_labels, feature_lookups=lookups, label="played",
     exclude_columns=["viewer_id", "title_id", "ts"],

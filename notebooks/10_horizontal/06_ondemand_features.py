@@ -35,6 +35,7 @@ assert os.path.isdir(os.path.join(_root, "src", "crfs")), \
     f"src/crfs not found above {os.getcwd()} -- is the bundle's whole file tree synced?"
 if _root not in sys.path: sys.path.insert(0, _root)
 from src.crfs.config import Config
+from src.crfs import rails as R
 from src.crfs import udfs, features
 
 cfg = Config.from_widgets(dbutils)
@@ -126,11 +127,12 @@ print(f"train: {train_labels.count()} | test (last 10d): {test_labels.count()}")
 # MAGIC UDFs. The UDFs depend on request columns (hour_of_day, request_epoch_s) that
 # MAGIC the app sends, and on lookup outputs (genre affinities, title genres, popularity).
 # COMMAND ----------
-lookups = [
-    FeatureLookup(table_name=cfg.t("viewer_features_current"), lookup_key="viewer_id"),
-    FeatureLookup(table_name=cfg.t("recent_behavior_current"), lookup_key="viewer_id"),
-    FeatureLookup(table_name=cfg.t("title_features"), lookup_key="title_id"),
-]
+# Same point-in-time lookups as notebook 02, from one definition -- see
+# rails.title_lookups and verification_log V76 for why the _current tables cannot be used
+# to train on a historical label log.
+lookups = R.title_lookups(cfg)
+for _lk in lookups:
+    print(f"  lookup {_lk.table_name.split('.')[-1]:24s} as-of={_lk.timestamp_lookup_key}")
 
 on_demand = udfs.feature_functions(cfg.fq)
 

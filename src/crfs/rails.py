@@ -870,7 +870,7 @@ def rail_lookups(cfg, point_in_time: bool = True):
     rail_tbl = "rail_features_ts" if point_in_time else "rail_features"
 
     return [
-        # --- shared with the watch-next ranker ---------------------------------
+        # --- the same two tables the watch-next ranker reads -------------------
         FeatureLookup(table_name=cfg.t(viewer_tbl), lookup_key="viewer_id", **ts),
         FeatureLookup(table_name=cfg.t(recent_tbl), lookup_key="viewer_id", **ts),
         # --- rail grain --------------------------------------------------------
@@ -878,3 +878,31 @@ def rail_lookups(cfg, point_in_time: bool = True):
         FeatureLookup(table_name=cfg.t("viewer_rail_features_ts"),
                       lookup_key=["viewer_id", "rail_id"], timestamp_lookup_key="ts"),
     ] + U.rail_feature_functions(cfg.fq)
+
+
+def title_lookups(cfg, point_in_time: bool = True):
+    """The watch-next (horizontal) ranker's lookups, defined beside the rail ranker's.
+
+    Same correction, same reason. Its labels are historical impressions too, and
+    `title_features.popularity_30d` / `plays_30d` aggregate engagement -- which is this
+    model's label -- so a lookup without a timestamp puts a holdout impression's own play
+    inside the popularity of the title it was shown for.
+
+    Keeping this next to `rail_lookups` is the point: the two models share
+    `viewer_features_ts` and `recent_behavior_ts` **as the same tables**, and that sharing
+    is checkable here rather than asserted in a slide. It stopped being true for one commit
+    when only the rail ranker moved to the point-in-time tables, and notebook 24's overlap
+    report caught it.
+    """
+    from databricks.feature_engineering import FeatureLookup
+
+    ts = {"timestamp_lookup_key": "ts"} if point_in_time else {}
+    viewer_tbl = "viewer_features_ts" if point_in_time else "viewer_features_current"
+    recent_tbl = "recent_behavior_ts" if point_in_time else "recent_behavior_current"
+    title_tbl = "title_features_ts" if point_in_time else "title_features"
+
+    return [
+        FeatureLookup(table_name=cfg.t(viewer_tbl), lookup_key="viewer_id", **ts),
+        FeatureLookup(table_name=cfg.t(recent_tbl), lookup_key="viewer_id", **ts),
+        FeatureLookup(table_name=cfg.t(title_tbl), lookup_key="title_id", **ts),
+    ]

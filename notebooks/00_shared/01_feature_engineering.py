@@ -87,6 +87,14 @@ display(spark.createDataFrame(
 # COMMAND ----------
 title_features = F.build_title_features(titles, events, AS_OF)
 print("title_features:", title_features.shape)
+
+# Daily snapshots, for the same reason as recent_behavior_ts: popularity_30d and plays_30d
+# are aggregates of engagement, and engagement is the watch-next ranker's label. Looked up
+# without a timestamp, a holdout impression's own play sits inside the popularity of the
+# title it was shown for -- the same defect as rail_ctr_30d (verification_log V76).
+title_ts = F.build_title_features_timeseries(
+    titles, events, dates=[d.date() for d in viewer_ts["ts"].unique()])
+print("title_features_ts:", title_ts.shape, f"({title_ts['ts'].nunique()} daily snapshots)")
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## Recent behaviour — the freshness-sensitive class
@@ -163,6 +171,12 @@ upsert_feature_table(
     "Title catalog and derived popularity features - mirrored to the online store",
     online_name="online_title_features")
 upsert_feature_table(
+    title_ts, "title_features_ts", ["title_id", "ts"],
+    "Daily snapshots of title catalog and popularity features - the point-in-time training "
+    "source. popularity_30d aggregates engagement, which is the ranker's label, so a "
+    "lookup without a timestamp would leak it.",
+    timeseries="ts", online_name="online_title_features_ts")
+upsert_feature_table(
     recent_behavior, "recent_behavior_current", ["viewer_id"],
     "Last-24h viewer behaviour - the freshness-sensitive class, mirrored to the online store",
     online_name="online_recent_behavior")
@@ -217,6 +231,7 @@ PUBLISH = [
     # viewer and the values match what the _current tables hold.
     ("viewer_features_ts", "online_viewer_features_ts"),
     ("recent_behavior_ts", "online_recent_behavior_ts"),
+    ("title_features_ts", "online_title_features_ts"),
 ]
 
 published = []
@@ -256,7 +271,7 @@ dbutils.notebook.exit(json.dumps({
     "online_store": cfg.online_store,
     "feature_tables": ["viewer_features_ts", "viewer_features_current",
                        "title_features", "recent_behavior_current",
-                       "recent_behavior_ts"],
+                       "recent_behavior_ts", "title_features_ts"],
     "online_tables": [{"table": d, "action": a} for _, d, a in published],
     "viewer_feature_cols": F.VIEWER_FEATURE_COLS,
     "sync": [{k: s.get(k) for k in ("name", "detailed_state", "last_processed_commit_version")}

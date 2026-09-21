@@ -140,15 +140,26 @@ class Config:
 # code declaration, not the deployed model's own feature spec, so it can still drift if
 # someone retrains with different lookups and does not update it -- notebook 24 says
 # which source it used rather than implying more authority than it has.
+# Both rankers read the point-in-time tables, and they read the SAME two viewer tables --
+# which is the sharing claim this repo makes, now checkable rather than asserted. See
+# rails.title_lookups / rails.rail_lookups, which are what the trainers use.
 HORIZONTAL_FEATURE_TABLES = [
-    "viewer_features_current",
-    "recent_behavior_current",
-    "title_features",
+    "viewer_features_ts",
+    "recent_behavior_ts",
+    "title_features_ts",
 ]
+# The rail ranker reads the POINT-IN-TIME tables, not the _current ones. That changed when
+# three of its lookups gained a timestamp_lookup_key (verification_log V76): the model's
+# feature spec now names these, so these are what the endpoint resolves online, where each
+# deduplicates to the latest row per key. Keeping the old names here would have made
+# notebook 24 report a shared-table overlap that no longer exists -- the exact drift the
+# notebook's own comment says this list exists to prevent.
+#
+# Must stay in step with rails.rail_lookups(), which is what the trainers actually use.
 VERTICAL_FEATURE_TABLES = [
-    "viewer_features_current",
-    "recent_behavior_current",
-    "rail_features",
+    "viewer_features_ts",
+    "recent_behavior_ts",
+    "rail_features_ts",
     "viewer_rail_features_ts",
 ]
 # Published online but read by neither ranker: the retriever's embedding and the
@@ -166,6 +177,9 @@ def online_readers() -> dict:
     `online_` and, for the time series table, shortened -- `viewer_rail_features_ts`
     publishes to `online_viewer_rail`.
     """
+    # The published name is the offline name prefixed with online_, with two exceptions:
+    # viewer_rail_features_ts was published under a shortened name before the others
+    # existed, and the _current suffix is dropped.
     published = {"viewer_rail_features_ts": "online_viewer_rail"}
     def pub(t):
         return published.get(t, f"online_{t.replace('_current', '')}")

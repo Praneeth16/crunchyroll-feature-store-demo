@@ -134,7 +134,11 @@ def viewer_current_from_ts(viewer_ts: pd.DataFrame) -> pd.DataFrame:
 def build_title_features(titles_pdf: pd.DataFrame, events_pdf: pd.DataFrame,
                          as_of: pd.Timestamp) -> pd.DataFrame:
     ev = _prepare_events(events_pdf, titles_pdf)
-    last30 = ev[ev["event_ts"] > as_of - pd.Timedelta(days=30)]
+    # Bounded at both ends -- the third place in this file where a one-sided window would
+    # let a historical snapshot count the future. `plays_30d` and `popularity_30d` are
+    # aggregates of engagement, which is the horizontal ranker's label, so an unbounded
+    # upper edge is label leakage and not merely staleness.
+    last30 = ev[(ev["event_ts"] > as_of - pd.Timedelta(days=30)) & (ev["event_ts"] <= as_of)]
     plays30 = (last30[last30["event_type"].isin(["complete", "skip"])]
                .groupby("title_id").size().rename("plays_30d"))
 
@@ -245,3 +249,26 @@ def build_recent_behavior_timeseries(events_pdf: pd.DataFrame, titles_pdf: pd.Da
         frames.append(snap)
     out = pd.concat(frames, ignore_index=True)
     return out[["viewer_id", "ts"] + RECENT_FEATURE_COLS]
+
+
+def build_title_features_timeseries(titles_pdf: pd.DataFrame, events_pdf: pd.DataFrame,
+                                    dates) -> pd.DataFrame:
+    """Daily snapshots of the title features -- the point-in-time source.
+
+    `popularity_30d` and `plays_30d` are aggregates of engagement, and engagement is the
+    watch-next ranker's label. Looking them up without a timestamp therefore leaks the
+    label into training exactly the way `rail_ctr_30d` did for the rail ranker
+    (verification_log V76): a holdout impression's own play is inside the popularity of the
+    title it was shown for.
+
+    One row per (title, day). 132 titles x 91 days is small; the work is one pass over the
+    event log per day.
+    """
+    frames = []
+    for day in pd.to_datetime(pd.Index(dates)).normalize().unique():
+        as_of = pd.Timestamp(day) + pd.Timedelta(days=1)
+        snap = build_title_features(titles_pdf, events_pdf, as_of)
+        snap["ts"] = pd.Timestamp(day)
+        frames.append(snap)
+    out = pd.concat(frames, ignore_index=True)
+    return out[["title_id", "ts"] + TITLE_FEATURE_COLS]
