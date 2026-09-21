@@ -1,5 +1,22 @@
 # Crunchyroll · Shared feature store, two ranking models, one request path
 
+> ### ⚠ The ranking metrics on this page are being re-measured
+>
+> A review found that three of the rail ranker's four feature lookups had no
+> `timestamp_lookup_key`, so historical labels were joined to *today's* feature values —
+> and `rail_features` carries `rail_ctr_30d` / `rail_clicks_30d`, which are aggregates of
+> the same `engaged` column the model predicts. A holdout impression's own click was
+> therefore inside its own features, which makes every NDCG, MRR and AUC figure below
+> **invalid rather than merely optimistic**.
+>
+> The fix is in: `recent_behavior_ts` and `rail_features_ts` now exist as point-in-time
+> sources and every lookup is as-of (`src/crfs/rails.py::rail_lookups`). The pipeline is
+> retraining against the corrected training set. **Treat the ranking numbers on this page
+> as withdrawn until this banner is gone.** Everything structural — the shared feature
+> layer, the serving path, the latency and throughput measurements — is unaffected, because
+> none of it depends on the training join.
+
+
 60–75 minutes · customer-facing · Databricks Feature Engineering in Unity Catalog +
 Lakebase Online Feature Store + Model Serving + Databricks Apps
 
