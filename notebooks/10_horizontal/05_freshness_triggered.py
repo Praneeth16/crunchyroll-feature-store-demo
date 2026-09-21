@@ -8,7 +8,9 @@
 # MAGIC 1. Reset viewer `v0001` to a calm baseline so the demo is repeatable
 # MAGIC 2. Rank 25 candidates — the "before"
 # MAGIC 3. Three sci-fi episodes complete **right now**
-# MAGIC 4. Recompute `recent_behavior_current` for that viewer and refresh the online table
+# MAGIC 4. Recompute the viewer's last-24h features and refresh **both** online copies --
+# MAGIC    `online_recent_behavior` for the app's raw panel, and
+# MAGIC    `online_recent_behavior_ts` because that is what the rankers' feature specs read
 # MAGIC 5. Rank the same 25 again — the "after"
 # MAGIC
 # MAGIC This is the **TRIGGERED** path: a refresh per change, on demand. Notebook 10
@@ -43,6 +45,9 @@ from src.crfs.config import Config
 from src.crfs import features as F
 from src.crfs import ops, online, candidates as C
 
+# n_events=0 means recompute-only: do not append events, just rebuild the feature and
+# refresh the online copies. That is what the crfs_event_burst job needs, because its first
+# task has already appended them.
 cfg = Config.from_widgets(dbutils, extra_widgets={"viewer_id": "v0001", "n_events": "3"})
 VID = cfg.extras.get("viewer_id", "v0001")
 N_EVENTS = int(cfg.extras.get("n_events", "3"))
@@ -75,6 +80,10 @@ BASELINE = pd.DataFrame([{
 }])
 RECENT = cfg.t("recent_behavior_current")
 ONLINE_RECENT = cfg.t("online_recent_behavior")
+# The point-in-time table and its online copy -- what both rankers' feature specs resolve
+# since their lookups gained a timestamp_lookup_key (verification_log V76).
+RECENT_TS = cfg.t("recent_behavior_ts")
+ONLINE_RECENT_TS = cfg.t("online_recent_behavior_ts")
 
 fe.write_table(name=RECENT, df=spark.createDataFrame(BASELINE), mode="merge")
 ops.refresh_and_wait(w, ONLINE_RECENT, timeout_s=300)
@@ -131,8 +140,18 @@ burst = pd.DataFrame([{
     "produced_epoch_ms": produced_ms,
 } for i, r in enumerate(scifi.itertuples())])
 
-(spark.createDataFrame(burst).write.mode("append").saveAsTable(cfg.t("engagement_events_stream")))
-print(f"appended {len(burst)} completions:", ", ".join(scifi["title_name"]))
+if N_EVENTS > 0:
+    (spark.createDataFrame(burst).write.mode("append")
+     .saveAsTable(cfg.t("engagement_events_stream")))
+    print(f"appended {len(burst)} completions:", ", ".join(scifi["title_name"]))
+else:
+    # n_events=0 is recompute-only, and it exists because of a double-count. The
+    # crfs_event_burst job runs notebook 11 (which appends the events) and then this
+    # notebook to recompute and refresh -- so with this cell appending as well, every click
+    # of the app's "watch 3 episodes now" button recorded SIX completions while the UI said
+    # three. The job now passes n_events=0 here.
+    print("n_events=0: recompute-only, appending nothing. The caller already wrote the "
+          "events -- see the crfs_event_burst job.")
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## Recompute the feature, refresh the online table
@@ -154,9 +173,30 @@ titles_pdf = spark.table(cfg.t("titles")).toPandas()
 recomputed = F.build_recent_behavior(hist, titles_pdf, pd.Timestamp(now), viewer_ids=[VID])
 print("recomputed:", recomputed.to_dict("records"))
 
+# BOTH tables, because the two rankers read the time series one.
+#
+# This notebook used to write only recent_behavior_current. Once the rankers' lookups
+# became point-in-time they resolve `recent_behavior_ts` instead, so the freshness beat was
+# updating a table no endpoint reads: the app's panel would show the new value while the
+# ranking stayed identical, and this task could report a zero delta as success. The
+# _current table is still written because the app's raw-Lakebase panel and the horizontal
+# demo path read it.
 fe.write_table(name=RECENT, df=spark.createDataFrame(recomputed), mode="merge")
+
+# The time series row is stamped NOW, not at a day boundary: this is the live-freshness
+# path, and a latest-per-key online lookup takes the newest row regardless. Same
+# end-of-window convention as the daily snapshots -- the window closes at `now`.
+recomputed_ts = recomputed.copy()
+recomputed_ts["ts"] = pd.Timestamp(now)
+fe.write_table(name=RECENT_TS, df=spark.createDataFrame(recomputed_ts), mode="merge")
+print(f"wrote a {pd.Timestamp(now)} snapshot to {RECENT_TS}")
+
 t0 = time.time()
 summary = ops.refresh_and_wait(w, ONLINE_RECENT, timeout_s=300)
+# The one the endpoints actually read. Refreshed second so the measured wall time below
+# covers both syncs rather than hiding one.
+summary_ts = ops.refresh_and_wait(w, ONLINE_RECENT_TS, timeout_s=300)
+print(f"{ONLINE_RECENT_TS}: {summary_ts.get('detailed_state')}")
 sync_wall_s = time.time() - t0
 
 row, cols, ms = store.keyed_read("online_recent_behavior", "viewer_id", VID)

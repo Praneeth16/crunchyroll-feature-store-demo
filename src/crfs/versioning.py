@@ -239,9 +239,12 @@ def drift_report(spark, model_uri: str, recorded_fingerprint: str = None) -> dic
             findings.append(
                 f"CHANGED  definitions differ from training ({recorded_fingerprint} -> "
                 f"{now}), and this model pins {len(spec_functions(spec))} on-demand "
-                "function(s), which the endpoint resolves BY NAME per request. If the "
-                "change was to a function body, live behaviour has ALREADY changed. "
-                "Compare the function fingerprint to be sure.")
+                "function(s). Measured on this workspace (verification_log V83), a live "
+                "endpoint did NOT pick up a redefined function within five minutes -- so it "
+                "is resolved at deploy or cached, and current traffic is probably still "
+                "seeing the old definition. Treat that as observed behaviour, not a "
+                "guarantee: the next deploy or container replacement will pick the change "
+                "up, and fe.score_batch uses the new definition immediately.")
         else:
             findings.append(
                 f"CHANGED  definitions differ from training ({recorded_fingerprint} -> "

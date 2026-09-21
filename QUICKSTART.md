@@ -68,8 +68,18 @@ endpoint uid). They cannot be guessed, which is why `scripts/bootstrap.sh` disco
 into `.crfs.vars` — gitignored, and passed to every bundle command as `--var`.
 
 **`make deploy` is the whole deploy.** Jobs, the checkpoint volume, the dashboard *and*
-the app are bundle resources. One exception: an app that already exists outside the
-bundle has to be adopted once, otherwise deploy tries to create it and gets 409:
+the app are bundle resources.
+
+**On a genuinely empty workspace, order matters.** The app declares the Lakebase database
+as a resource, and that database's id is *generated* when `fe.create_online_store` runs in
+notebook 01 — so it does not exist before the first pipeline run. `make bootstrap` writes
+the real id into `.crfs.vars`, and `./setup.sh` sequences all of this for you. Taking a
+shortcut straight to `make deploy` on a workspace that has never run the pipeline binds
+whatever default `databricks.yml` carries, which is another workspace's database.
+`make preflight` says so explicitly when it cannot resolve the id.
+
+One more exception: an app that already exists outside the bundle has to be adopted once,
+otherwise deploy tries to create it and gets 409:
 
 ```bash
 databricks bundle deployment bind crfs_watch_next crfs-watch-next -t dev --profile <PROFILE>

@@ -140,8 +140,15 @@ _days = [r["d"] for r in spark.sql(f"""
 print(f"building rail feature snapshots for {len(_days)} days "
       f"({_days[0]} .. {_days[-1]})")
 _t0 = time.perf_counter()
+# The per-day title snapshots, read once for the whole loop. Passing the CURRENT
+# title_features frame for every historical day put end-of-history popularity into every
+# rail snapshot -- a point-in-time audience aggregate with non-point-in-time content stats
+# beside it, which leaks just as effectively.
+title_features_ts_pdf = spark.table(cfg.t("title_features_ts")).toPandas()
+print(f"title_features_ts: {len(title_features_ts_pdf)} rows, "
+      f"{title_features_ts_pdf['ts'].nunique()} snapshots")
 rail_features_ts = R.build_rail_features_timeseries(
-    spark, cfg.t("rail_impressions"), rails_pdf, rail_titles_pdf, title_features_pdf,
+    spark, cfg.t("rail_impressions"), rails_pdf, rail_titles_pdf, title_features_ts_pdf,
     dates=_days)
 print(f"rail_features_ts: {rail_features_ts.shape} in {time.perf_counter() - _t0:0.0f}s")
 # The point of the table, shown rather than asserted: the same rail's CTR moves.

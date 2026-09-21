@@ -345,8 +345,30 @@ def train_streaming(parquet_path: str,
     device = "cuda" if torch.cuda.is_available() else "cpu"
     started = time.perf_counter()
 
-    batches = list(range(sum(1 for _ in iter_batches(parquet_path, batch_size))))
-    n_batches = len(batches)
+    # Physical Parquet order is NOT chronological: Spark writes partitions in whatever order
+    # they complete, and pyarrow does not promise file iteration order either. Treating the
+    # tail of the batch stream as a temporal holdout was therefore an arbitrary split with a
+    # temporal label on it. The export is sorted by the caller, but that is not something
+    # this function can verify, so it checks: if the first timestamp of each batch is not
+    # monotonic, the streaming path refuses rather than reporting a holdout it cannot defend.
+    ts_col = None
+    firsts = []
+    for frame in iter_batches(parquet_path, batch_size):
+        if ts_col is None:
+            ts_col = next((c for c in ("event_ts", "ts", "impression_ts", "request_epoch_s")
+                           if c in frame.columns), None)
+            if ts_col is None:
+                raise ValueError(
+                    "the exported training set has no timestamp column, so a streaming "
+                    "time-ordered holdout is not possible. Re-export carrying the label "
+                    "timestamp, or use train(streaming=False).")
+        firsts.append(frame[ts_col].iloc[0])
+    if any(b < a for a, b in zip(firsts, firsts[1:])):
+        raise ValueError(
+            f"batches are not ordered by {ts_col} (first values: {firsts[:5]}...), so the "
+            "tail is not a temporal holdout. Sort the export by that column before "
+            "streaming, or use train(streaming=False) which sorts in memory.")
+    n_batches = len(firsts)
     if n_batches < 2:
         # One batch is not a stream; fall back rather than pretend, and say so.
         print(f"only {n_batches} batch at size {batch_size}; using the in-memory path")

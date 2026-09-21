@@ -815,8 +815,26 @@ def check_model_columns(columns, numeric, categorical, not_features):
     return missing, unused
 
 
+def title_features_at(title_features_ts_pdf, as_of):
+    """The title feature snapshot in force at `as_of` -- the latest row at or before it.
+
+    Takes the whole `title_features_ts` frame rather than a table name so the caller reads
+    it once for the whole loop instead of once per day.
+    """
+    import pandas as _pd
+
+    df = title_features_ts_pdf[title_features_ts_pdf["ts"] <= _pd.Timestamp(as_of)]
+    if df.empty:
+        # Before the first snapshot there is no history to summarise; the earliest one is
+        # the closest honest answer and is itself built from a short window.
+        df = title_features_ts_pdf[
+            title_features_ts_pdf["ts"] == title_features_ts_pdf["ts"].min()]
+    return (df.sort_values("ts").groupby("title_id", as_index=False).tail(1)
+            .drop(columns=["ts"]))
+
+
 def build_rail_features_timeseries(spark, impressions_table: str, rails_pdf,
-                                   rail_titles_pdf, title_features_pdf, dates):
+                                   rail_titles_pdf, title_features_ts_pdf, dates):
     """Daily snapshots of the rail-grain features -- the point-in-time source.
 
     `rail_features` holds one as-of row per rail, so a `FeatureLookup` on it without a
@@ -836,8 +854,15 @@ def build_rail_features_timeseries(spark, impressions_table: str, rails_pdf,
     for day in _pd.to_datetime(_pd.Index(dates)).normalize().unique():
         as_of = _pd.Timestamp(day) + _pd.Timedelta(days=1)
         audience = rail_audience(spark, impressions_table, as_of)
-        snap = build_rail_features(rails_pdf, rail_titles_pdf, title_features_pdf, audience)
-        snap["ts"] = _pd.Timestamp(day)
+        # The title features must be AS OF THE SAME DAY. Passing one current frame for every
+        # historical day put end-of-history popularity and content age into every snapshot,
+        # which is the same leak at one remove -- the audience aggregate was point-in-time
+        # while the content stats beside it were not.
+        titles_for_day = title_features_at(title_features_ts_pdf, as_of)
+        snap = build_rail_features(rails_pdf, rail_titles_pdf, titles_for_day, audience)
+        # Stamped at the end of the window it summarises, matching
+        # viewer_rail_features_ts, so a same-day impression cannot read its own click.
+        snap["ts"] = as_of
         frames.append(snap)
     out = _pd.concat(frames, ignore_index=True)
     return out[["rail_id", "ts"] + RAIL_FEATURE_COLS]

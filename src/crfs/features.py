@@ -241,11 +241,15 @@ def build_recent_behavior_timeseries(events_pdf: pd.DataFrame, titles_pdf: pd.Da
     """
     frames = []
     for day in pd.to_datetime(pd.Index(dates)).normalize().unique():
-        # As-of the END of the day, so a label stamped that day sees the window that
-        # closed with it rather than one that closed the previous midnight.
+        # Computed through the END of the day and STAMPED there too. Stamping at the start
+        # of the day while computing through its end is leakage, not a detail: a
+        # point-in-time join for an impression at 09:00 would match the row stamped 00:00
+        # that same day, and that row contains events up to 23:59 -- possibly including the
+        # impression's own outcome. `viewer_rail_features_ts` already stamps at end of day
+        # for exactly this reason; these snapshots now match it.
         as_of = pd.Timestamp(day) + pd.Timedelta(days=1)
         snap = build_recent_behavior(events_pdf, titles_pdf, as_of, viewer_ids=viewer_ids)
-        snap["ts"] = pd.Timestamp(day)
+        snap["ts"] = as_of
         frames.append(snap)
     out = pd.concat(frames, ignore_index=True)
     return out[["viewer_id", "ts"] + RECENT_FEATURE_COLS]
@@ -266,9 +270,12 @@ def build_title_features_timeseries(titles_pdf: pd.DataFrame, events_pdf: pd.Dat
     """
     frames = []
     for day in pd.to_datetime(pd.Index(dates)).normalize().unique():
+        # Stamped at the end of the window it summarises -- see the note in
+        # build_recent_behavior_timeseries. Stamping at the start of the day lets a
+        # same-day impression read its own outcome.
         as_of = pd.Timestamp(day) + pd.Timedelta(days=1)
         snap = build_title_features(titles_pdf, events_pdf, as_of)
-        snap["ts"] = pd.Timestamp(day)
+        snap["ts"] = as_of
         frames.append(snap)
     out = pd.concat(frames, ignore_index=True)
     return out[["title_id", "ts"] + TITLE_FEATURE_COLS]

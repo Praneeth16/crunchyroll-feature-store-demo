@@ -103,6 +103,10 @@ for job in w.jobs.list():
 # MAGIC ## 4 · Synced (online) tables
 # COMMAND ----------
 ONLINE = ["online_viewer_features", "online_title_features", "online_recent_behavior",
+          # The published point-in-time copies. Each has its own sync pipeline, so leaving
+          # them behind leaves billable resources and a store that cannot be deleted.
+          "online_viewer_features_ts", "online_recent_behavior_ts",
+          "online_title_features_ts", "online_rail_features_ts",
           "online_viewer_embedding", "online_session_features",
           # vertical ranking
           "online_rail_features", "online_viewer_rail"]
@@ -139,10 +143,15 @@ if KEEP_DATA:
     print("keep_data=true - leaving UC tables and models in place.")
 else:
     TABLES = ["viewer_features_ts", "viewer_features_current", "title_features",
+              # The point-in-time tables the rankers' specs resolve. Omitting them left a
+              # "full" teardown with three feature tables and three sync pipelines still
+              # standing -- a partially provisioned workspace that looks torn down.
+              "title_features_ts", "recent_behavior_ts",
               "recent_behavior_current", "viewer_embedding_current", "session_features_current",
               "engagement_events_stream", "crfs_ops_sync_log",
               # vertical ranking: feature tables before their sources
-              "rail_features", "viewer_rail_features_ts", "crfs_serving_benchmark",
+              "rail_features", "rail_features_ts", "viewer_rail_features_ts",
+              "crfs_serving_benchmark", "crfs_batch_state", "rail_rankings_batch",
               "rail_impressions", "rail_position_propensity", "rail_title_map", "rails",
               "titles", "viewers", "entitlements", "engagement_events"]
     for name in TABLES:

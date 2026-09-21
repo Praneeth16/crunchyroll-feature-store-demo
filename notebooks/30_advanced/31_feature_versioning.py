@@ -534,25 +534,34 @@ for name in sorted(models):
         continue
 
     tag = dict(mc.get_model_version(name, str(vs[0])).tags or {}).get(V.TAG_FINGERPRINT)
-    fp = V.definition_fingerprint(spark, s)
-    missing_t = [k for k, v in fp["tables"].items() if v is None]
-    missing_f = [k for k, v in fp["functions"].items() if v is None]
-    findings = ([f"BROKEN table {k}" for k in missing_t]
-                + [f"BROKEN function {k}" for k in missing_f])
-    now = V.fingerprint_hash(fp)
-    if tag and tag != now and not findings:
-        findings.append(f"CHANGED definitions since training ({tag} -> {now})")
+    # drift_report rather than a second implementation of it. The inline version here
+    # skipped the comparison when a model had no fingerprint tag and left `findings` empty,
+    # so `ok` came out True -- labelling every untagged model healthy while drift_report
+    # classified the identical state as `unverifiable`. Two code paths, two answers.
+    rep = V.drift_report(spark, uri, recorded_fingerprint=tag)
+    n_features = len(V.spec_features(s))
     fleet.append({"model": short, "version": vs[0],
-                  "tables": len(V.spec_tables(s)), "functions": len(V.spec_functions(s)),
-                  "ok": not findings, "findings": findings})
+                  "tables": len(rep["tables"]), "functions": len(rep["functions"]),
+                  # A Feature-Views model's spec names features, not tables, so the table
+                  # count is 0 and there is nothing for the drift check to look at. Reported
+                  # so a vacuous `ok` is not read as a clean bill of health.
+                  "features": n_features,
+                  "status": rep["status"], "ok": rep["ok"],
+                  "findings": rep["findings"]})
     for obj in V.spec_tables(s) + V.spec_functions(s):
         pins.setdefault(obj, []).append(short)
 
-print(f"{'model':34s} {'ver':>4s} {'tables':>7s} {'funcs':>6s}  status")
+print(f"{'model':34s} {'ver':>4s} {'tbl':>4s} {'fn':>3s} {'feat':>5s}  status")
 for r in fleet:
-    status = ("no feature spec" if r["ok"] is None
-              else ("ok" if r["ok"] else r["findings"][0][:60]))
-    print(f"{r['model']:34s} {str(r['version']):>4s} {r['tables']:>7d} {r['functions']:>6d}  {status}")
+    detail = r.get("status") or ("no feature spec" if r["ok"] is None else "?")
+    if r["findings"] and detail not in ("ok",):
+        detail = f"{detail}: {r['findings'][0][:52]}"
+    print(f"{r['model']:34s} {str(r['version']):>4s} {r['tables']:>4d} "
+          f"{r['functions']:>3d} {r.get('features', 0):>5d}  {detail}")
+print()
+print("`unverifiable` means no feature_definition_fingerprint tag, so nothing could be")
+print("compared against training -- not that the model is fine. A Feature-Views model shows")
+print("0 tables because its spec names features; the drift check has nothing to inspect.")
 
 print("\nwho pins what -- this is the answer to 'what breaks if I change this':")
 for obj, users in sorted(pins.items(), key=lambda kv: (-len(kv[1]), kv[0])):

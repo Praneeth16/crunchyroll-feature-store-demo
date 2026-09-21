@@ -321,10 +321,14 @@ resources:
               n_events: "3"
               viewer_id: v0001
           timeout_seconds: 600
-        # Appending events is not enough on its own. recent_behavior_current is a
-        # TRIGGERED table, so the online row only moves when something recomputes it
-        # and refreshes the sync -- which is notebook 05's job. Without this task the
-        # app's burst button fires, waits, and correctly reports that nothing changed.
+        # Appending events is not enough on its own. The recent-behaviour tables are
+        # TRIGGERED, so the online rows only move when something recomputes them and
+        # refreshes the syncs -- which is notebook 05's job. Without this task the app's
+        # burst button fires, waits, and correctly reports that nothing changed.
+        #
+        # n_events=0 is recompute-only. With the default of 3 this task appended three MORE
+        # completions on top of the burst task's three, so every click of the app's
+        # "watch 3 episodes now" button logged six while the UI said three.
         - task_key: recompute_and_refresh
           depends_on:
             - task_key: burst
@@ -332,7 +336,7 @@ resources:
             notebook_path: ../notebooks/10_horizontal/05_freshness_triggered.py
             base_parameters:
               <<: *common_params
-              n_events: "3"
+              n_events: "0"
               viewer_id: v0001
           timeout_seconds: 900
 

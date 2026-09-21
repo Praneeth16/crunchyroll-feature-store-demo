@@ -167,8 +167,13 @@ def current_versions(tables) -> dict:
     return out
 
 
-FEATURE_TABLES = ["viewer_features_current", "recent_behavior_current",
-                  "rail_features", "viewer_rail_features_ts"]
+# Derived from the lookups the model was trained with, not typed again. These were the
+# _current tables while the ranker resolved the _ts ones, so a change to a table the model
+# actually reads produced no CDF activity here and the affected viewers kept stale
+# rankings -- incremental mode watching the wrong tables entirely.
+FEATURE_TABLES = [lk.table_name.split(".")[-1] for lk in R.rail_lookups(cfg)
+                  if getattr(lk, "table_name", None)]
+print("watching the tables the model pins:", FEATURE_TABLES)
 versions_now = current_versions(FEATURE_TABLES)
 print("feature table versions:", versions_now)
 

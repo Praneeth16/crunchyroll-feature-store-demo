@@ -516,15 +516,26 @@ def online_tables(pattern: str):
     return [r["table_name"] for r in rows]
 
 
+# How many online destinations to expect: one per (entity, window) grouping, which is what
+# the offline tables reveal once they exist. Waiting for "at least one online table" let the
+# first group's arrival report success while other groups were still building -- and
+# online_ready=true with half the features missing is worse than no signal.
 deadline = time.time() + 1200
-offline, online = {}, []
+offline, online, expected = {}, [], None
 while time.time() < deadline:
     offline = fv_tables(f"{PREFIX}*")
     online = online_tables(f"{PREFIX}_online%")
-    ready = offline and all(isinstance(v, int) and v > 0 for v in offline.values())
-    if ready and online:
+    offline_only = {k: v for k, v in offline.items() if not k.startswith(f"{PREFIX}_online")}
+    if offline_only:
+        expected = len(offline_only)
+    ready_offline = offline_only and all(isinstance(v, int) and v > 0
+                                        for v in offline_only.values())
+    ready_online = expected is not None and len(online) >= expected
+    if ready_offline and ready_online:
         break
-    print(f"waiting: offline={offline or '{}'} online={online or '[]'}")
+    print(f"waiting: offline={len(offline_only)} tables "
+          f"({sum(1 for v in offline_only.values() if isinstance(v, int) and v > 0)} with rows)"
+          f" | online={len(online)}/{expected if expected is not None else '?'}")
     time.sleep(45)
 
 print("\noffline feature tables:")
@@ -549,6 +560,12 @@ else:
 
 materialized_report["offline"] = offline
 materialized_report["online"] = online
+materialized_report["online_expected"] = expected
+materialized_report["online_complete"] = bool(expected) and len(online) >= expected
+if expected and len(online) < expected:
+    print(f"\nINCOMPLETE: {len(online)} of {expected} online destinations present. The "
+          "offline side is materialized; the online pipelines for the remaining groups had "
+          "not finished within the wait. This is reported rather than passed.")
 # COMMAND ----------
 dbutils.notebook.exit(json.dumps({
     "model": MODEL,
@@ -558,5 +575,5 @@ dbutils.notebook.exit(json.dumps({
     "n_labels": n_labels,
     "materialized": True,
     "materialization": materialized_report,
-    "online_ready": bool(materialized_report.get("online")),
+    "online_ready": bool(materialized_report.get("online_complete")),
 }, default=str))

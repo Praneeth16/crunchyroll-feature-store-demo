@@ -49,6 +49,18 @@ resources:
           sql_warehouse:
             id: ${var.warehouse_id}
             permission: CAN_USE
+        # The Lakebase database id is GENERATED when fe.create_online_store runs
+        # (notebook 01), so on a genuinely empty workspace it does not exist at the time of
+        # the first `bundle deploy` and `lakebase_db_resource` still holds the default from
+        # databricks.yml -- another workspace's id. Binding it here would either fail
+        # validation or bind the wrong database.
+        #
+        # Sequencing, which scripts/preflight.sh now checks rather than assuming:
+        #   make bootstrap   discovers or creates the store and writes the real id
+        #   make deploy      binds it, because the var is now correct
+        # A fresh workspace that has never run notebook 01 must therefore run `make demo`
+        # (or setup.sh, which orders this for you) before the app can reach Postgres. The
+        # app degrades to Feature Serving until then and shows a badge saying so.
         - name: postgres
           postgres:
             branch: projects/${var.lakebase_project}/branches/${var.lakebase_branch}
