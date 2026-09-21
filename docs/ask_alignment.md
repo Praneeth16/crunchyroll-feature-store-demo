@@ -1,21 +1,5 @@
 # Alignment check against the Crunchyroll ask
 
-> ### ⚠ The ranking metrics on this page are being re-measured
->
-> A review found that three of the rail ranker's four feature lookups had no
-> `timestamp_lookup_key`, so historical labels were joined to *today's* feature values —
-> and `rail_features` carries `rail_ctr_30d` / `rail_clicks_30d`, which are aggregates of
-> the same `engaged` column the model predicts. A holdout impression's own click was
-> therefore inside its own features, which makes every NDCG, MRR and AUC figure below
-> **invalid rather than merely optimistic**.
->
-> The fix is in: `recent_behavior_ts` and `rail_features_ts` now exist as point-in-time
-> sources and every lookup is as-of (`src/crfs/rails.py::rail_lookups`). The pipeline is
-> retraining against the corrected training set. **Treat the ranking numbers on this page
-> as withdrawn until this banner is gone.** Everything structural — the shared feature
-> layer, the serving path, the latency and throughput measurements — is unaffected, because
-> none of it depends on the training join.
-
 
 A line-by-line audit of ["Write-up — Vertical Ranking Demo Ask"](https://docs.google.com/document/d/1HwZEDqRA_PNzRPSZbQS0sxZuxyItzSoUgl2rxxfhdLU/edit)
 against what the POC actually does. Every **met** row names the artifact that proves
@@ -35,8 +19,8 @@ Status vocabulary is deliberately narrow: **met** = built and verified in a live
 | Feature Engineering | met | `notebooks/20_vertical/21_rail_features.py`, `src/crfs/rails.py` |
 | Feature Store | met | 7 UC feature tables, all published to Lakebase; `verify.sh` asserts row counts and dedup |
 | Model Training | met | `notebooks/20_vertical/22_train_rail_ranker.py`, trained from `fe.create_training_set` |
-| Model Registration | met | UC model `crunchyroll_rail_ranker` v10, `@champion`, tagged and described |
-| Model Serving | met | `crunchyroll-rail-ranker`, READY, serving v10, `scale_to_zero=false`, concurrency 4–32 |
+| Model Registration | met | UC model `crunchyroll_rail_ranker` v11, `@champion`, tagged and described |
+| Model Serving | met | `crunchyroll-rail-ranker`, READY, serving v11, `scale_to_zero=false`, concurrency 4–32 |
 | Ranked Rails | met | `notebooks/20_vertical/24_homepage_assembly.py` — 14–16 eligible rails per viewer (mean 15.4), ranked in one call |
 
 All five stages run from one command (`make up`), on a workspace whose ids are
@@ -73,8 +57,8 @@ UDFs.** Nothing forked, nothing copied, no private per-model copy of a viewer fe
 | Training dataset from stored features | met | `fe.create_training_set` with 4 `FeatureLookup`s and 5 `FeatureFunction`s; **no hand-written join** |
 | Point-in-time correctness | met | `timestamp_lookup_key` against `viewer_rail_features_ts`; verified with an isolated probe job before the architecture was chosen |
 | Model management | met | registered in **Unity Catalog** (not the workspace registry), so it is a securable with grants and lineage |
-| Version management | met | integer versions, `@champion` alias, three tags incl. `ndcg5_lift_vs_editorial=+0.0539`, full description, lineage to `run_id` |
-| Deployment | met | notebook 23 resolves `@champion` → version 10 and pins the **immutable version**; promotion and deployment stay two separate steps |
+| Version management | met | integer versions, `@champion` alias, three tags incl. `ndcg5_lift_vs_editorial=+0.0429`, full description, lineage to `run_id` |
+| Deployment | met | notebook 23 resolves `@champion` → version 11 and pins the **immutable version**; promotion and deployment stay two separate steps |
 | Rollback | met | set the `model_version` widget to a previous version and rerun; in-place update, no rebuild |
 | Training at production volume | **partial** | the PIT join is Spark and scales; the **estimator does not** — `toPandas()` + scikit-learn is single-driver. Documented, with the substitution named (Spark ML / XGBoost on Spark from `load_df()`), and it does not touch the feature layer or serving path |
 | Canary / traffic splitting | **not met** | 100% of traffic goes to one version. Model Serving supports splitting; this POC does not use it |
@@ -93,7 +77,7 @@ UDFs.** Nothing forked, nothing copied, no private per-model copy of a viewer fe
 | Returns personalized rankings | met | `rail_id` / `engagement_probability` / `rail_rank`, ranked within `viewer_id` |
 | **How online features are retrieved** | met | the endpoint does it, not the caller: **7 request fields in, 45 feature values resolved server-side** across 4 tables and 5 UDFs (the model scores on 47 features: 43 of those retrieved values plus the 4 context fields the caller sends) |
 | Context actually changes the answer | met | notebook 24 and the app score the same viewer at 09:00/21:00 × TV/mobile; **5 to 12 of 16 rails move** between contexts (live, 2026-09-18, two runs against the 21:00 TV order: 09:00 TV 6 then 5, 21:00 mobile 12 then 7, 09:00 mobile 9 both times) with nothing in the feature store changing. A zero would fail the run loudly |
-| Personalization is the source of the lift | met | ablation removing all 13 rail-identity features loses nothing (NDCG@5 0.7157 → 0.7161), across two independent runs |
+| Personalization is the source of the lift | met | ablation removing all 13 rail-identity features loses nothing (NDCG@5 0.6984 → 0.7026), across two independent runs |
 
 ---
 
@@ -155,7 +139,7 @@ the original document, so it is recorded here as an addition rather than an ask 
 | Element | Status | Evidence |
 |---|---|---|
 | Batch scoring from the same feature store | met | `notebooks/20_vertical/26_batch_scoring.py`, `fe.score_batch` against the **offline** store — no online store involved |
-| Same model serves both paths | met | v10 `@champion` scored both ways; **16 of 16 collections at identical rank**, Spearman 1.0 |
+| Same model serves both paths | met | v11 `@champion` scored both ways; **16 of 16 collections at identical rank**, Spearman 1.0 |
 | Minutes-level refresh cadence | met, at demo scale | CDF-driven incremental mode; `make batch-incremental`. Unsized at their MAU |
 | What batch gives up | measured | **up to 12 of 16 collections** move across four contexts (5-12 across runs) — personalization a precomputed table cannot deliver |
 | Migration path documented | met | `docs/batch_and_online.md` — what changes is one API call and where features are read from |

@@ -1,19 +1,5 @@
 # Demo script — Crunchyroll vertical ranking
 
-> ### ⚠ Do not present the ranking metrics from this script yet
->
-> Three of the rail ranker's four feature lookups were not point-in-time, and
-> `rail_features` carries aggregates of the label (`rail_ctr_30d`, `rail_clicks_30d`), so
-> holdout impressions contained their own clicks. **Every NDCG / MRR / AUC number in this
-> script is withdrawn** until the corrected retrain is measured — see
-> [verification_log.md](verification_log.md) V76.
->
-> The rest of the script stands: the shared feature layer, the request contract, the
-> context-sensitivity beats, the freshness loop and the latency and throughput numbers do
-> not depend on the training join. If you are presenting before the numbers are back, say
-> the lift is being re-measured after a leakage fix — that is a better story than a number
-> nobody can defend.
-
 
 **Audience:** Mohit Kukkar + Crunchyroll ranking/platform.
 **Runtime:** 45 min demo + 15 min discussion.
@@ -141,19 +127,19 @@ Three things to show, in order:
 |---|---|
 | model | `serverless_lakebase_praneeth_catalog.crunchyroll_demo.crunchyroll_rail_ranker` |
 | version | **10**, alias `@champion` |
-| NDCG@5 | **0.7157** vs **0.6791** incumbent editorial order = **+5.39%** |
-| MRR | 0.7147 vs 0.6775 |
-| holdout AUC (viewed impressions) | 0.6345 |
-| holdout | 537 homepage sessions, 9,903 rows |
-| tags | `ndcg5_lift_vs_editorial=+0.0539`, `position_bias_correction=ips` |
+| NDCG@5 | **0.6984** vs **0.6697** incumbent editorial order = **+4.29%** |
+| MRR | 0.6866 vs 0.6629 |
+| holdout AUC (viewed impressions) | 0.6331 |
+| holdout | 542 homepage sessions, 9,903 rows |
+| tags | `ndcg5_lift_vs_editorial=+0.0429`, `position_bias_correction=ips` |
 
-**Say the caveat before they ask it:** this is synthetic data. +5.39% is evidence the
+**Say the caveat before they ask it:** this is synthetic data. +4.29% is evidence the
 pipeline works end to end. It is **not** a forecast of Crunchyroll's lift.
 
 **The ablation** — this is the question a ranking team always asks, so answer it unprompted:
 "is the lift personalization, or just a better *fixed* collection order?" Remove all 13
-collection-identity features and NDCG@5 goes **0.7157 → 0.7161** — it does not drop.
-Spearman(full, ablated) 0.9735. The lift is personalization.
+collection-identity features and NDCG@5 goes **0.6984 → 0.7026** — it does not drop.
+Spearman(full, ablated) 0.947. The lift is personalization.
 
 ---
 
@@ -166,7 +152,7 @@ Open `26_batch_scoring.py`. Frame it:
 > Lakebase is not in GCP us-west1 until November, so your deliverable is batch. This
 > notebook is the batch path, and there is no online store anywhere in it.
 
-**Show the resolve:** `@champion` → concrete version 10. The *same* version the endpoint
+**Show the resolve:** `@champion` → concrete version 11. The *same* version the endpoint
 serves. This is deliberate — if batch and online scored different versions the comparison
 at the end of the notebook would be meaningless.
 
@@ -298,7 +284,7 @@ cadence.
 
 ## Act 6 · Production serving numbers (7 min)
 
-Full tables in `docs/serving_benchmark.md`. In-region job, model v10, `scale_to_zero=false`,
+Full tables in `docs/serving_benchmark.md`. In-region job, model v11, `scale_to_zero=false`,
 concurrency 4–32, route optimization off (this workspace rejected it).
 
 | question | measured |

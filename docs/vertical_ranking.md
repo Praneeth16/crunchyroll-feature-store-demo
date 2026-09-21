@@ -1,21 +1,5 @@
 # Vertical Ranking on Databricks — what the POC shows, and what it does not
 
-> ### ⚠ The ranking metrics on this page are being re-measured
->
-> A review found that three of the rail ranker's four feature lookups had no
-> `timestamp_lookup_key`, so historical labels were joined to *today's* feature values —
-> and `rail_features` carries `rail_ctr_30d` / `rail_clicks_30d`, which are aggregates of
-> the same `engaged` column the model predicts. A holdout impression's own click was
-> therefore inside its own features, which makes every NDCG, MRR and AUC figure below
-> **invalid rather than merely optimistic**.
->
-> The fix is in: `recent_behavior_ts` and `rail_features_ts` now exist as point-in-time
-> sources and every lookup is as-of (`src/crfs/rails.py::rail_lookups`). The pipeline is
-> retraining against the corrected training set. **Treat the ranking numbers on this page
-> as withdrawn until this banner is gone.** Everything structural — the shared feature
-> layer, the serving path, the latency and throughput measurements — is unaffected, because
-> none of it depends on the training join.
-
 
 This answers the four things the Crunchyroll DSML ask named — a shared feature
 store, model lifecycle, online inference, and production serving — plus the
@@ -300,26 +284,48 @@ NDCG@5 and MRR per homepage session against three baselines — the incumbent
 editorial order, global rail CTR, and random — restricted to sessions with at least
 one engagement and at least four viewed rails.
 
-Measured on **537 holdout homepage sessions** (81,109 training rows, 9,903 holdout rows),
-model version 10:
+Measured on **542 holdout homepage sessions** (81,416 training rows, 10,199 holdout rows),
+model version 11, with **every feature lookup point-in-time** — see the note below, because
+that qualifier is the difference between these numbers and the ones this document used to
+carry:
 
 | Scorer | NDCG@3 | NDCG@5 | MRR |
 |---|---|---|---|
-| **Vertical ranker** | **0.6163** | **0.7157** | **0.7147** |
-| Vertical ranker, no rail-identity features | 0.6191 | 0.7161 | 0.7176 |
-| Incumbent editorial order | 0.5618 | 0.6791 | 0.6775 |
-| Rail popularity (global CTR) | 0.5707 | 0.6814 | 0.6803 |
-| Random | 0.4550 | 0.5956 | 0.5759 |
+| **Vertical ranker** | **0.5885** | **0.6984** | **0.6866** |
+| Vertical ranker, no rail-identity features | 0.5935 | 0.7026 | 0.6942 |
+| Incumbent editorial order | 0.5509 | 0.6697 | 0.6629 |
+| Rail popularity (global CTR) | 0.5516 | 0.6689 | 0.6616 |
+| Random | 0.4687 | 0.6074 | 0.5826 |
 
-**+5.39% NDCG@5** against the order the homepage ships today. Holdout AUC is 0.7374 across
-all impressions and **0.6345 on viewed impressions only** — the second number is the one
+**+4.29% NDCG@5** against the order the homepage ships today. Holdout AUC is 0.7419 across
+all impressions and **0.6331 on viewed impressions only** — the second number is the one
 to quote, because engagement on a rail nobody scrolled to is not a preference.
 
-**These numbers are a rerun, and that is the point.** An earlier run of the identical
-pipeline on independently regenerated data gave NDCG@5 0.7065 vs 0.6751 incumbent
-(+4.7%), AUC-viewed 0.6228, on 511 sessions. This run gives 0.7157 vs 0.6791 (+5.39%),
-AUC-viewed 0.6345, on 537 sessions. Different data, same conclusion, same order of
-magnitude — which is a **reproducibility** result, and worth more than either run alone.
+### These replace numbers that were measured through a leak
+
+The previous figures — NDCG@5 0.7157 vs 0.6791, +5.39% — were produced by a training set
+in which three of four feature lookups had no `timestamp_lookup_key`. Historical labels
+were joined to *today's* feature values, and `rail_features` carries `rail_ctr_30d` and
+`rail_clicks_30d`, which are aggregates of the same `engaged` column the model predicts. A
+holdout impression's own click was inside its own features, so those metrics were **invalid
+rather than optimistic**. `verification_log.md` V76 has the full account;
+`src/crfs/rails.py::rail_lookups` is the fix.
+
+What changed, and what did not:
+
+| | Through the leak | Point-in-time |
+|---|---|---|
+| NDCG@5, ranker | 0.7157 | **0.6984** |
+| NDCG@5, incumbent | 0.6791 | **0.6697** |
+| Lift | +5.39% | **+4.29%** |
+| MRR | 0.7147 | **0.6866** |
+| AUC, viewed | 0.6345 | **0.6331** |
+| Ablated NDCG@5 | 0.7161 | **0.7026** |
+
+The leak was worth about **1.1 points of lift**. It did not manufacture the result: the
+ranker still beats the incumbent order, the ablation conclusion below still holds, and the
+serving path never depended on the training join at all. What it did was make the headline
+number indefensible, which is why it was withdrawn rather than adjusted.
 
 Read the lift as evidence the pipeline works, **not as a forecast**. The labels come from
 a latent utility the model can recover, a few hundred sessions is a small evaluation set,
@@ -328,9 +334,11 @@ and the honest measurement is an interleaving or bucket test, which this POC doe
 **Where the lift comes from — and a result worth pausing on.** The ablation drops all 13
 rail-identity features (44 numeric features down to 31), leaving only viewer × rail
 history, request context and the on-demand crosses. It does not lose anything: NDCG@5 goes
-from 0.7157 to **0.7161**, very slightly *up*, with Spearman 0.9735 between the two
-models' scores confirming they genuinely differ. A prior run showed the same thing
-(0.7140 → 0.7169, Spearman 0.9755).
+from 0.6984 to **0.7026**, very slightly *up*, with Spearman 0.947 between the two
+models' scores confirming they genuinely differ. The leaky run showed the same thing
+(0.7157 → 0.7161, Spearman 0.9735), so this conclusion survived the correction — which is
+the strongest evidence for it, because the leak and the fix disagree about the level and
+agree about the shape.
 
 **So the entire lift is personalization** — not a better fixed order of rails. That
 conclusion rests on the ablation, which is a direct measurement of the thing in question,
@@ -408,7 +416,7 @@ API rather than asserted here:
 | version | **10** |
 | alias | **`@champion`** |
 | `position_bias_correction` | `ips` |
-| `ndcg5_lift_vs_editorial` | `+0.0539` — relative, i.e. +5.39% over the incumbent order, not an absolute NDCG delta |
+| `ndcg5_lift_vs_editorial` | `+0.0429` — relative, i.e. +4.29% over the incumbent order, not an absolute NDCG delta |
 | `serves` | `vertical rail ranking, homepage request path` |
 | description | model purpose, the four feature tables it reads, the five UDFs, the IPS weighting, holdout AUC on viewed impressions, NDCG lift, and the ablation result |
 | lineage | `run_id db31fcb9f1114c20ad41bd058b6913d5`, with 14 metrics logged against it |
@@ -540,7 +548,7 @@ than assumed.
 behaviour, and behaviour under traffic spikes.
 
 **Full tables in [`serving_benchmark.md`](serving_benchmark.md).** All measurements from
-an in-region job against `crunchyroll-rail-ranker` serving **version 10**
+an in-region job against `crunchyroll-rail-ranker` serving **version 11**
 (`scale_to_zero=false`, provisioned concurrency 4–32, route optimization **off** because
 the workspace rejected it), 12 candidate rails per request unless stated.
 
@@ -702,7 +710,7 @@ The benchmark runs **twice**:
 * `make bench-local` — the same code from a laptop.
 
 Both were run against the same endpoint and the same 12-rail payload. The in-region
-column is the current run (model version 10); the laptop column is the run made from here.
+column is the current run (model version 11); the laptop column is the run made from here.
 The latency gap between regions is two orders of magnitude larger than any difference
 between model versions.
 

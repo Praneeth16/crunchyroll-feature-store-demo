@@ -615,12 +615,12 @@ to 0.09 at position 16**. Fit that raw and the model learns the old homepage.
 | NDCG@3/@5 and MRR per session vs the incumbent editorial order, rail CTR, and random | notebook 22 |
 | An ablation that drops the whole rail-identity block, isolating personalization from "a better fixed order" | notebook 22 |
 
-Measured on 537 holdout homepage sessions: **NDCG@5 0.7157 for the ranker against
-0.6791 for the incumbent editorial order — +5.39%**; MRR 0.7147 against 0.6775; holdout
-AUC 0.6345 on viewed impressions.
+Measured on 542 holdout homepage sessions: **NDCG@5 0.6984 for the ranker against
+0.6697 for the incumbent editorial order — +4.29%**; MRR 0.6866 against 0.6629; holdout
+AUC 0.6331 on viewed impressions.
 
-The ablation that drops **all 13 rail-identity features** loses nothing — NDCG@5 0.7161,
-slightly *up*, Spearman 0.9735 confirming the models differ. **So the whole lift is
+The ablation that drops **all 13 rail-identity features** loses nothing — NDCG@5 0.7026,
+slightly *up*, Spearman 0.947 confirming the models differ. **So the whole lift is
 personalization**, not a better fixed order. Rail-level aggregates score on permutation
 importance (an AUC metric) yet cannot reorder rails for one viewer, because within a
 session every viewer sees the same rail-level priors. Note the importance *ordering*

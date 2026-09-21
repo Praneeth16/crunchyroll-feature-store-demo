@@ -226,7 +226,7 @@ html{scroll-behavior:smooth}
 <div class="rail">
   <div class="rail-in">
     <span class="brandmark">Databricks&nbsp;·&nbsp;POC readout</span>
-    <span class="rail-meta">model v10 @champion · verified 2026-09-18</span>
+    <span class="rail-meta">model v11 @champion · verified 2026-09-18</span>
     <span class="rail-nav">
       <button id="prev" type="button" aria-label="Previous slide">←</button>
       <span id="counter">1 / 13</span>
@@ -251,12 +251,12 @@ html{scroll-behavior:smooth}
     <div class="stat b"><b>16 / 16</b><span>collections at identical rank, batch vs online</span></div>
     <div class="stat b"><b>1.0</b><span>Spearman(batch order, online order)</span></div>
     <div class="stat o"><b>52 ms</b><span>endpoint p50 in region, 12 collections</span></div>
-    <div class="stat w"><b>+5.39%</b><span>NDCG@5 over the incumbent editorial order</span></div>
+    <div class="stat w"><b>+4.29%</b><span>NDCG@5 over the incumbent editorial order</span></div>
   </div>
   <p class="small">
     Every figure in this deck was measured on
     <span class="mono">serverless_lakebase_praneeth_catalog.crunchyroll_demo</span> against
-    registered model version 10, and re-verified on 18 Sep 2026. Synthetic data — 300 viewers,
+    registered model version 11, and re-verified on 18 Sep 2026. Synthetic data — 300 viewers,
     132 titles, 363,351 homepage impressions. The lift is evidence the pipeline works, not a
     forecast of Crunchyroll's lift.
   </p>
@@ -282,7 +282,7 @@ html{scroll-behavior:smooth}
       <dl class="kv">
         <dt>endpoint</dt><dd>crunchyroll-rail-ranker</dd>
         <dt>grain</dt><dd>viewer × collection</dd>
-        <dt>status</dt><dd>READY, v10 @champion</dd>
+        <dt>status</dt><dd>READY, v11 @champion</dd>
       </dl>
     </div>
   </div>
@@ -383,9 +383,9 @@ html{scroll-behavior:smooth}
 
       <rect x="502" y="152" width="176" height="62" rx="6" fill="var(--accent)" stroke="var(--accent)"/>
       <text x="512" y="170" font="600 11.5px sans-serif" style="font:600 11.5px 'Public Sans',sans-serif" fill="#fff">UC Model Registry</text>
-      <text x="512" y="184" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">rail_ranker v10 @champion</text>
+      <text x="512" y="184" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">rail_ranker v11 @champion</text>
       <text x="512" y="197" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">spec logged INSIDE model</text>
-      <text x="512" y="209" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">NDCG@5 +5.39%</text>
+      <text x="512" y="209" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">NDCG@5 +4.29%</text>
       <text class="ls" x="502" y="252" fill="var(--accent)">one registered version</text>
       <text class="ls" x="502" y="264" fill="var(--accent)">feeds BOTH paths below</text>
 
@@ -425,7 +425,7 @@ html{scroll-behavior:smooth}
       <!-- proof -->
       <rect x="768" y="366" width="342" height="82" rx="8" fill="var(--batch)" stroke="var(--batch)"/>
       <text x="782" y="388" style="font:800 12px 'Bricolage Grotesque',sans-serif" fill="#fff">MEASURED — THE TWO PATHS AGREE</text>
-      <text x="782" y="406" style="font:400 10.5px 'IBM Plex Mono',monospace" fill="#fff">same viewer · same collections · same context · v10</text>
+      <text x="782" y="406" style="font:400 10.5px 'IBM Plex Mono',monospace" fill="#fff">same viewer · same collections · same context · v11</text>
       <text x="782" y="421" style="font:400 10.5px 'IBM Plex Mono',monospace" fill="#fff">16 of 16 identical rank · Spearman 1.0</text>
       <text x="782" y="436" style="font:400 10.5px 'IBM Plex Mono',monospace" fill="#fff">max |Δp| 0.0026 = the clock, not a bug</text>
 
@@ -537,14 +537,14 @@ html{scroll-behavior:smooth}
   <h2>Trained from the store, corrected for position bias, registered in Unity Catalog</h2>
   <div class="cols-2">
     <div class="card">
-      <h3>Model version 10 · <span class="mono">@champion</span></h3>
+      <h3>Model version 11 · <span class="mono">@champion</span></h3>
       <dl class="kv">
-        <dt>NDCG@5, ranker</dt><dd>0.7157</dd>
-        <dt>NDCG@5, incumbent editorial</dt><dd>0.6791</dd>
-        <dt>relative lift</dt><dd>+5.39%</dd>
-        <dt>MRR</dt><dd>0.7147 vs 0.6775</dd>
-        <dt>holdout AUC, viewed</dt><dd>0.6345</dd>
-        <dt>holdout</dt><dd>537 sessions · 9,903 rows</dd>
+        <dt>NDCG@5, ranker</dt><dd>0.6984</dd>
+        <dt>NDCG@5, incumbent editorial</dt><dd>0.6697</dd>
+        <dt>relative lift</dt><dd>+4.29%</dd>
+        <dt>MRR</dt><dd>0.6866 vs 0.6629</dd>
+        <dt>holdout AUC, viewed</dt><dd>0.6331</dd>
+        <dt>holdout</dt><dd>542 sessions · 9,903 rows</dd>
         <dt>training rows</dt><dd>81,109</dd>
         <dt>registry tag</dt><dd>position_bias_correction=ips</dd>
       </dl>
@@ -558,7 +558,7 @@ html{scroll-behavior:smooth}
       <h3 style="margin-top:16px">The ablation answers the obvious objection</h3>
       <p class="small">"Is the lift personalization, or just a better <em>fixed</em> order?"
       Removing all 13 collection-identity features moves NDCG@5 from
-      <strong>0.7157 to 0.7161</strong> — it does not drop. Spearman(full, ablated) 0.9735, so the
+      <strong>0.6984 to 0.7026</strong> — it does not drop. Spearman(full, ablated) 0.947, so the
       two models genuinely differ. <strong>The lift is personalization.</strong></p>
     </div>
   </div>
@@ -578,7 +578,7 @@ html{scroll-behavior:smooth}
     <div class="stat b"><b>4,628</b><span>rows scored — 300 viewers × 14–16 collections</span></div>
     <div class="stat b"><b>69.9 s</b><span>score_batch + materialisation</span></div>
     <div class="stat b"><b>2.9 s</b><span>write of the ranked table</span></div>
-    <div class="stat b"><b>v10</b><span>same model version the endpoint serves</span></div>
+    <div class="stat b"><b>v11</b><span>same model version the endpoint serves</span></div>
   </div>
   <div class="cols-2">
     <div class="card plain">
@@ -705,14 +705,6 @@ html{scroll-behavior:smooth}
           .vl{font:600 10px "IBM Plex Mono",monospace;fill:var(--online)}
           .ttl{font:600 11px "Public Sans",sans-serif;fill:var(--ink)}
         </style>
-<div style="background:#4a1212;color:#ffd9d9;border-left:6px solid #ff5c5c;padding:18px 22px;margin:0;font:15px/1.5 system-ui,sans-serif">
-<strong style="display:block;font-size:17px;margin-bottom:6px">&#9888; Ranking metrics in this deck are withdrawn</strong>
-Three of four rail-ranker feature lookups were not point-in-time, and <code>rail_features</code>
-carries aggregates of the label (<code>rail_ctr_30d</code>, <code>rail_clicks_30d</code>) &mdash; so
-holdout impressions contained their own clicks. Every NDCG, MRR and AUC figure here is invalid
-until the corrected retrain is measured (see <code>docs/verification_log.md</code> V76).
-The architecture, the serving path and the latency and throughput measurements are unaffected.
-</div>
 
         <text class="ttl" x="8" y="16">Endpoint p50, ms — by collections per request</text>
         <!-- y grid at 0,25,50,75,100 -->

@@ -608,3 +608,45 @@ hand-computed expectations for all six (viewer, day) cells.
   `env_manager="virtualenv"` rebuilds the logged environment there. The sklearn model needs
   none of this, which is why the difference is invisible until a torch model appears. Model
   Serving is unaffected — it builds the model's environment when it deploys.
+
+### V79 · The corrected numbers: the leak was worth 1.1 points of lift
+
+Retrained after V76, on a fully regenerated dataset of the same shape (363,351 rail
+impressions, 300 viewers, 90 days ending 2026-09-21), 25% session sample, model version 11,
+run `730db609821d41d6882f06aed85f3cb3`. **Every feature lookup point-in-time.**
+
+| | Through the leak (v10) | Point-in-time (v11) |
+|---|---|---|
+| NDCG@5, ranker | 0.7157 | **0.6984** |
+| NDCG@5, incumbent editorial | 0.6791 | **0.6697** |
+| Lift vs incumbent | +5.39% | **+4.29%** |
+| NDCG@3, ranker vs incumbent | — | 0.5885 vs 0.5509 |
+| MRR, ranker vs incumbent | 0.7147 / 0.6775 | **0.6866 / 0.6629** |
+| AUC, all impressions | — | 0.7419 |
+| AUC, viewed impressions | 0.6345 | **0.6331** |
+| Ablated NDCG@5 (no rail-identity features) | 0.7161 | **0.7026** |
+| Spearman(model, ablated) | 0.9735 | **0.947** |
+| Holdout sessions | 537 | **542** |
+
+**What the correction cost:** about 1.1 points of NDCG@5 lift. The leak did not manufacture
+the result — the ranker still beats the order the homepage ships today — but it did make the
+headline number indefensible, which is why it was withdrawn rather than quietly adjusted.
+
+**What survived, and is stronger for having survived:** the ablation. Dropping all 13
+rail-identity features still loses nothing (0.6984 → 0.7026, slightly up, Spearman 0.947),
+exactly as it did through the leak (0.7157 → 0.7161, Spearman 0.9735). The leak and the fix
+disagree about the *level* and agree about the *shape*, so "the entire lift is
+personalization, not a better fixed rail order" now rests on two runs that differ in their
+training join.
+
+Importance by source on the corrected run, with the same instability caveat as before:
+`viewer_rail_features_ts` 0.0453, `rail_features` 0.0307, request-time UDFs 0.0297, shared
+viewer tables 0.0029, request context 0.0013. The shared viewer tables still sit near zero
+for *rail* ranking, which is the finding `vertical_ranking.md` already discusses.
+
+Also confirmed by this run: `recent_behavior_ts` holds 27,300 rows (300 viewers x 91 days)
+and its online copy 300 -- one per viewer, identical to `online_recent_behavior`. So the
+point-in-time correction changed the training join and **not** what serving reads.
+`rail_features_ts` holds 1,440 rows (16 rails x 90 days) with 1,353 distinct CTR values, and
+`r_continue`'s 30-day window fills from 129 to 959 impressions across the log -- under the
+old code every historical label saw only the last value in that series.
