@@ -650,3 +650,59 @@ point-in-time correction changed the training join and **not** what serving read
 `rail_features_ts` holds 1,440 rows (16 rails x 90 days) with 1,353 distinct CTR values, and
 `r_continue`'s 30-day window fills from 129 to 959 impressions across the log -- under the
 old code every historical label saw only the last value in that series.
+
+### V80 · The watch-next ranker had the same leak, and fixing it moved its numbers too
+
+V76 was about the rail ranker. The horizontal ranker's training set had the identical
+defect: `viewer_features_current`, `recent_behavior_current` and `title_features` looked up
+with no `timestamp_lookup_key` against a log of historical impressions. And
+`title_features.popularity_30d` / `plays_30d` are aggregates of engagement, which is *this*
+model's label — so a holdout impression's own play sat inside the popularity of the title it
+was shown for.
+
+`title_features_ts` now exists (daily snapshots, 132 titles x 91 days), notebooks 02 and 06
+read it as-of, and `rails.title_lookups()` sits beside `rails.rail_lookups()` so the two
+models' lookup sets are defined together.
+
+Measured after the correction, partial run (`generate_data` deliberately skipped so the rail
+metrics from V79 stay comparable):
+
+| | Value |
+|---|---|
+| watch-next v1, holdout AUC | **0.7064** (model version 12) |
+| watch-next v2 with request-time features | **0.7139** (version 13) |
+| v2 lift over its v1 reference | **+0.0496** |
+| training / holdout rows | 61,222 / 7,302 |
+
+The previous published figures were 0.6696 for v2 against 0.6643 for v1 (+0.0053).
+
+**A third instance of the one-sided window**, in `build_title_features`: `plays_30d` counted
+every event after the lower bound with no upper bound, so a historical snapshot counted the
+future. The fixture asserts `plays_30d` grows 1, 2, 3 as the window fills; a leaky build
+returns 3 for every day.
+
+### V81 · The sharing claim broke for one commit, and the demo's own report caught it
+
+With only the rail ranker moved to the point-in-time tables, notebook 24's overlap query --
+which resolves readers from `config.HORIZONTAL_FEATURE_TABLES` / `VERTICAL_FEATURE_TABLES`
+rather than from a slide -- went to **zero shared online tables**. Correctly: the two models
+were reading different physical objects, so "one feature layer, two ranking models" had
+stopped being true.
+
+Both rankers now read `viewer_features_ts` and `recent_behavior_ts` as the same tables,
+point-in-time, and the overlap report shows two shared tables again. The notebook's design
+note earned its keep here: a parallel dict in the notebook would have kept printing the old
+answer.
+
+### V82 · A markdown cell missing `%md` costs a whole job run
+
+`crfs_versioning` failed 28 minutes in with
+`SyntaxError: invalid syntax ... Before touching a definition, this is the question to
+answer`. An edit had removed the `# MAGIC %md` opening line of one cell, so Databricks
+executed the prose as Python. Everything before it -- the spec read, the fingerprinting, the
+drift report, the in-place UDF experiment and the canary -- had already run.
+
+`scripts/check_notebooks.py` now catches it, and `make validate` runs it before
+`bundle validate`. It reproduces this exact failure in under a second, and also checks that
+`%pip` is alone in its cell. The class of bug is worth a script: every instance is free to
+find locally and charges a full job run to find remotely.

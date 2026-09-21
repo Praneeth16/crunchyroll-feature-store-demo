@@ -47,7 +47,11 @@ preflight: ## Check prerequisites; print the ids the bundle needs
 render: ## Render the dashboard template for this workspace
 	@./scripts/render_dashboard.sh
 
-validate: render ## Strict bundle validation
+# check_notebooks.py runs first because it is free and catches what a job charges for: a
+# markdown cell missing its `%md` executes as Python, and that was found 28 minutes into a
+# run whose earlier cells had all passed.
+validate: render ## Lint the notebooks, then strict bundle validation
+	python3 scripts/check_notebooks.py
 	$(BUNDLE) validate --strict $(FLAGS)
 
 deploy: validate ## Deploy jobs, volume and dashboard

@@ -249,11 +249,19 @@ decay_null           0.0       missing key → no exception
 match_all_null       0.0
 ```
 
-Result of adding them, reported as measured: holdout AUC **0.6696** for v2 against
-**0.6643** for v1, so **+0.0053** on 61,222 training and 7,302 holdout rows, with 38
-numeric plus 4 categorical features. A small lift on synthetic data. The claim this
-demo makes is about the mechanism — features that cannot be precomputed still travel
-with the model and are evaluated inside the endpoint — not about the number.
+Result of adding them, reported as measured on the **point-in-time** training set:
+holdout AUC **0.7139** for v2 against **0.6643** for its v1 reference, so **+0.0496** on
+61,222 training and 7,302 holdout rows, with 38 numeric plus 4 categorical features. The
+watch-next ranker's own v1 scored **0.7064** in the same run (model version 12; v2 is
+version 13).
+
+These replace figures measured before this ranker's lookups were made point-in-time.
+`title_features.popularity_30d` and `plays_30d` aggregate engagement, which is this model's
+label, so looking them up without a timestamp put a holdout impression's own play inside
+the popularity of the title it was shown for — the same defect as the rail ranker's
+`rail_ctr_30d` (see [verification_log.md](verification_log.md) V76, V80). The claim this
+demo makes is still about the mechanism — features that cannot be precomputed travel with
+the model and are evaluated inside the endpoint — not about the number.
 
 Two things to say out loud: the label frame gains
 `request_epoch_s = unix_timestamp(event_ts)`, which is the point-in-time-correct

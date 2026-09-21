@@ -461,6 +461,7 @@ results["canary"] = canary
 # MAGIC The restore above runs in the `finally`, so this holds even if the measurement
 # MAGIC failed. Verified by reading the routes back and asserting, not by assuming.
 # COMMAND ----------
+# MAGIC %md
 # MAGIC ## 7 · Which models would a change affect?
 # MAGIC
 # MAGIC Before touching a definition, this is the question to answer, and Unity Catalog
