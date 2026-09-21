@@ -1,5 +1,20 @@
 # Demo script — Crunchyroll vertical ranking
 
+> ### ⚠ Do not present the ranking metrics from this script yet
+>
+> Three of the rail ranker's four feature lookups were not point-in-time, and
+> `rail_features` carries aggregates of the label (`rail_ctr_30d`, `rail_clicks_30d`), so
+> holdout impressions contained their own clicks. **Every NDCG / MRR / AUC number in this
+> script is withdrawn** until the corrected retrain is measured — see
+> [verification_log.md](verification_log.md) V76.
+>
+> The rest of the script stands: the shared feature layer, the request contract, the
+> context-sensitivity beats, the freshness loop and the latency and throughput numbers do
+> not depend on the training join. If you are presenting before the numbers are back, say
+> the lift is being re-measured after a leakage fix — that is a better story than a number
+> nobody can defend.
+
+
 **Audience:** Mohit Kukkar + Crunchyroll ranking/platform.
 **Runtime:** 45 min demo + 15 min discussion.
 **Workspace:** `fevm-serverless-lakebase-praneeth` · catalog `serverless_lakebase_praneeth_catalog` · schema `crunchyroll_demo`.

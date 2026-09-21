@@ -705,6 +705,15 @@ html{scroll-behavior:smooth}
           .vl{font:600 10px "IBM Plex Mono",monospace;fill:var(--online)}
           .ttl{font:600 11px "Public Sans",sans-serif;fill:var(--ink)}
         </style>
+<div style="background:#4a1212;color:#ffd9d9;border-left:6px solid #ff5c5c;padding:18px 22px;margin:0;font:15px/1.5 system-ui,sans-serif">
+<strong style="display:block;font-size:17px;margin-bottom:6px">&#9888; Ranking metrics in this deck are withdrawn</strong>
+Three of four rail-ranker feature lookups were not point-in-time, and <code>rail_features</code>
+carries aggregates of the label (<code>rail_ctr_30d</code>, <code>rail_clicks_30d</code>) &mdash; so
+holdout impressions contained their own clicks. Every NDCG, MRR and AUC figure here is invalid
+until the corrected retrain is measured (see <code>docs/verification_log.md</code> V76).
+The architecture, the serving path and the latency and throughput measurements are unaffected.
+</div>
+
         <text class="ttl" x="8" y="16">Endpoint p50, ms — by collections per request</text>
         <!-- y grid at 0,25,50,75,100 -->
         <g>
