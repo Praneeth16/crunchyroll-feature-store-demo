@@ -1,0 +1,55 @@
+# AI Runtime CLI workload: the same GPU training, submitted from a laptop.
+#
+#   uv tool install --force databricks-air --python 3.12
+#   air run --file ai/train.yaml -p fe-vm-lakebase-praneeth --watch
+#
+# Why this exists alongside the job in resources/jobs_advanced.yml: the job is how
+# scheduled retraining belongs in a bundle, and this is how a person iterates on
+# training code without deploying anything. Both run src/crfs/train_gpu.py -- one
+# module, not a copy, so a fix in one is a fix in both.
+#
+# The prerequisite is that the training set has already been exported to the volume
+# by notebook 32 (`fe.create_training_set` needs Spark; this GPU task does not have
+# it and does not need it -- it reads Parquet). That split is deliberate: the
+# expensive point-in-time join runs once on serverless, and every training iteration
+# after it reads files.
+#
+# Accelerators: GPU_1xA10 (1 GPU, cheapest), GPU_1xH100 (1), GPU_8xH100 (multiples of
+# 8). num_accelerators must match the per-node count encoded in the type.
+experiment_name: /Users/praneeth.paikray@databricks.com/crunchyroll_rail_ranker_gpu
+
+compute:
+  accelerator_type: GPU_1xA10
+  num_accelerators: 1
+
+# Bash, so the argument list is visible in the run page rather than buried in a wrapper.
+command: >-
+  python ai/train_entrypoint.py
+  --parquet /Volumes/serverless_lakebase_praneeth_catalog/crunchyroll_demo/crfs_ops/gpu_training/training_set
+  --epochs 8
+  --batch-size 4096
+  --lr 0.001
+
+environment:
+  # torch is excluded from the Standard serverless environment to keep the image small;
+  # the accelerator image supplies CUDA, pip supplies the wheel.
+  dependencies:
+    - torch
+    - scikit-learn
+    - pyarrow
+    - pandas
+    - mlflow
+
+code_source:
+  type: snapshot
+  snapshot:
+    # The repo root, so `src.crfs.train_gpu` imports the same way it does in a notebook.
+    root_path: ..
+    include_paths:
+      - src/
+      - ai/
+
+# There is no budget cap on serverless GPU. A timeout is the only backstop, so it is
+# set deliberately rather than left at the default.
+timeout_minutes: 90
+max_retries: 0

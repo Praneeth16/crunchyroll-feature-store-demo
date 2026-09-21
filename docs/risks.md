@@ -94,10 +94,10 @@ it is declared as a task `environments:` dependency in `resources/jobs.yml`.
 **Fix.** `mode=loop` is the default and needs nothing extra. Zerobus is the
 production ingest story, not a dependency of the demo.
 
-## 8b · `bundle deploy` cannot update an existing app
+## 8b · `bundle deploy` could not update an existing app — FIXED in CLI v1.17.0
 
-**Symptom.** The first deploy creates the app; every deploy after that fails, and
-takes the whole bundle deploy down with it:
+**Symptom (v1.14.1).** The first deploy creates the app; every deploy after that fails,
+and takes the whole bundle deploy down with it:
 
 ```
 POST /api/2.0/apps/<app>/update -> 400 INVALID_PARAMETER_VALUE
@@ -107,20 +107,33 @@ git_repository, git_source, telemetry_export_destinations, compatibility_flags a
 allowed. Supplied update mask: ... forward_user_access_token ...
 ```
 
-**Why.** Databricks CLI v1.14.1 puts `forward_user_access_token` in the update mask
-unconditionally, and this workspace's Apps API rejects it. The bundle never sets that
-field. Reproduced twice with zero file changes.
+**Why.** v1.14.1 put `forward_user_access_token` in the update mask unconditionally and
+this workspace's Apps API rejects it. The bundle never set that field. Reproduced twice
+with zero file changes.
 
-**Fix.** The app is not a bundle resource. `scripts/deploy_app.sh` uses
-`databricks apps create` / `apps create-update` plus `apps deploy`, which is the
-supported path, and resolves the Lakebase database id and burst job id at run time
-rather than hardcoding them. The bundle resource is kept for reference at
-`docs/app.resource.yml.reference` for whenever the CLI catches up. `make deploy`
-handles the bundle; `make deploy-app` handles the app.
+**Status: resolved.** Retested on **CLI v1.17.0**, 2026-09-21: `bundle deploy` reports
+`Updated apps.crfs_watch_next` and `bundle run crfs_watch_next` deploys the app's source
+and restarts it. The app is a bundle resource again (`resources/app.yml`), and
+`scripts/deploy_app.sh` and `docs/app.resource.yml.reference` are gone.
 
-Related: the script waits for the app's compute to leave `DELETING` before calling
-create-update, because `create-update` on a deleting app returns
-`App compute needs to be ACTIVE or STOPPED to update.`
+Three things that retest turned up, each of which cost a deploy:
+
+* **An app created outside the bundle must be adopted once.** Without it, deploy tries to
+  create and gets `409 ALREADY_EXISTS`:
+  `databricks bundle deployment bind crfs_watch_next crfs-watch-next`.
+* **In a bundle the field is `value_from`, not app.yaml's `valueFrom`.** The camelCase
+  spelling only *warns* and is then ignored, which would have left the app with no
+  warehouse id at all.
+* **`app.yaml` had to go, not just move.** Databricks Apps does not expand `${NAME}`
+  inside it, which is why the old script rendered a staging copy before upload — and why
+  one deploy shipped without `RAIL_RANKER_ENDPOINT` and the app silently fell back to a
+  previous workspace's endpoint name. The bundle resolves `${var.*}` itself, so command
+  and env now come from `resources/app.yml` alone.
+
+**Open platform gap:** `GET /api/2.0/apps/{name}` does **not** return `config`, so the
+environment an app actually received cannot be read back through the API. It was
+confirmed here by making the app print its own env once at startup. Worth knowing before
+debugging an app that behaves as if a variable is missing.
 
 ## 8c · DBFS root is disabled
 

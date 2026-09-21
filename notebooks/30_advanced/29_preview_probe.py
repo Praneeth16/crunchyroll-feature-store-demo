@@ -150,6 +150,44 @@ for name in ["create_feature", "register_feature", "compute_features",
 findings["signatures"] = sigs
 # COMMAND ----------
 # MAGIC %md
+# MAGIC ### Registration surface
+# MAGIC
+# MAGIC A locally-defined `Feature` has no catalog or schema, and anything that needs its
+# MAGIC full name raises `ValueError: Feature does not have a catalog and schema`. So the
+# MAGIC object a caller keeps matters: `register_feature` **returns** the registered
+# MAGIC feature, and that returned object is the one to pass to `create_training_set` and
+# MAGIC `materialize_features`. This cell prints every client method so an idempotent
+# MAGIC re-registration path can be written against what exists rather than guessed.
+# COMMAND ----------
+methods = sorted(m for m in dir(fe) if not m.startswith("_") and callable(getattr(fe, m)))
+print("FeatureEngineeringClient methods:")
+print("  " + "\n  ".join(", ".join(methods[i:i + 4]) for i in range(0, len(methods), 4)))
+findings["client_methods"] = methods
+
+for name in ["get_feature", "read_feature", "get_features", "list_features",
+             "delete_feature", "get_feature_view", "drop_feature"]:
+    print(f"  {name}: {'present' if hasattr(fe, name) else 'absent'}")
+
+# Which of this repo's feature views are already registered in UC -- a re-run has to
+# find them rather than fail on ALREADY_EXISTS.
+try:
+    from src.crfs import feature_views as FV
+
+    local = FV.viewer_features(cfg.catalog, cfg.schema)
+    getter = getattr(fe, "get_feature", None)
+    for f in local[:2]:
+        if getter is None:
+            break
+        try:
+            got = getter(name=f"{cfg.catalog}.{cfg.schema}.{f.name}")
+            print(f"  already registered: {f.name} -> {type(got).__name__}")
+            findings.setdefault("registered_already", []).append(f.name)
+        except Exception as e:
+            print(f"  not registered yet: {f.name} ({type(e).__name__}: {str(e)[:80]})")
+except Exception as e:
+    print("registration check skipped:", type(e).__name__, str(e)[:120])
+# COMMAND ----------
+# MAGIC %md
 # MAGIC ## 3 · Compute one real feature
 # MAGIC
 # MAGIC The only check that distinguishes *documented* from *enabled here*: define a

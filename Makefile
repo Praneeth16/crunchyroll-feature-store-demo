@@ -5,6 +5,10 @@
 #   make deploy         bundle deploy + Postgres grants + start the app
 #   make demo           the horizontal (title) pipeline, end to end
 #   make vertical       the vertical (rail) pipeline, end to end
+#   make probe          does this workspace have the two previews the advanced track needs
+#   make feature-views  Feature Views: declare features, train from them, materialize
+#   make versioning     feature-definition versioning against the live endpoint
+#   make gpu-train      train the rail ranker on a serverless GPU (billable)
 #   make bench          measure the rail endpoint under load, in region
 #   make bench-local    the same benchmark from this laptop, for contrast
 #   make cost           what the online store is billing right now
@@ -23,7 +27,8 @@ VARS    := $(shell test -f .crfs.vars && grep -v '^\#' .crfs.vars | grep -v '^CR
 FLAGS    = -t $(TARGET) --profile $(PROFILE) $(VARS)
 
 .DEFAULT_GOAL := help
-.PHONY: help up bootstrap render preflight validate deploy deploy-app demo vertical batch batch-incremental bench bench-local \
+.PHONY: help up bootstrap render preflight validate deploy deploy-app demo vertical batch batch-incremental \
+        probe feature-views versioning gpu-train bench bench-local \
         bench-pull streaming burst agent app-logs app-url cost verify teardown-cost teardown \
         destroy fmt
 
@@ -83,6 +88,21 @@ batch: deploy ## The offline path: score every viewer with score_batch, no onlin
 
 batch-incremental: deploy ## Rescore only viewers whose features changed (CDF-driven)
 	$(BUNDLE) run crfs_batch $(FLAGS) --batch_mode incremental
+
+# ---------------------------------------------------------------- advanced track
+# Everything here stands on a Public Preview API. `probe` answers whether this
+# workspace has them before anything else is attempted.
+probe: deploy ## Check this workspace has the Feature Views and serverless GPU previews
+	$(BUNDLE) run crfs_preview_probe $(FLAGS)
+
+feature-views: deploy ## Declarative authoring: Feature Views for training, then materialized
+	$(BUNDLE) run crfs_feature_views $(FLAGS)
+
+versioning: deploy ## What a deployed model pins, what an in-place change does, and a canary
+	$(BUNDLE) run crfs_versioning $(FLAGS)
+
+gpu-train: deploy ## Train the rail ranker on a serverless GPU (A10). Billable.
+	$(BUNDLE) run crfs_gpu_train $(FLAGS)
 
 bench: deploy ## Measure the rail endpoint under load from inside the region
 	$(BUNDLE) run crfs_benchmark $(FLAGS)

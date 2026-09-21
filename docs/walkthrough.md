@@ -571,3 +571,122 @@ where Unity Catalog shows nothing and the next `publish_table` still fails with
 
 Full details and the five levers in order: [docs/cost_and_sizing.md](docs/cost_and_sizing.md).
 
+
+---
+
+## Vertical ranking — the detail
+
+online:  4,681 rows
+one row per key confirmed; online is ~99x smaller
+```
+
+and the synced table's own spec came back as
+`primary_key_columns=[viewer_id, rail_id]`, `timeseries_key=ts`. Notebook 21 asserts
+this rather than printing it, because everything the serving path claims depends on
+it.
+
+So there is no `viewer_rail_current` mirror. Training and serving read the same table
+through the same `FeatureLookup`. That is a stronger statement than "two tables built
+from one definition" — the horizontal path still keeps `viewer_features_ts` +
+`viewer_features_current`, and collapsing it the same way is the recommendation
+written up in [docs/vertical_ranking.md](docs/vertical_ranking.md).
+
+### Position bias, which a homepage ranker cannot skip
+
+Every label in a homepage log was observed at a position the *incumbent* policy
+chose. Measured on this data, `P(viewport | position)` falls from **0.97 at position 1
+to 0.09 at position 16**. Fit that raw and the model learns the old homepage.
+
+| Mechanism | Where |
+|---|---|
+| `rail_position_propensity` — measured `P(viewport \| position)` and clipped IPS weights | notebook 20 |
+| Clicked rows weighted by `1 / P(viewport \| position)`, clipped at 10× | notebook 22 |
+| **Rendered position is never a feature** — at request time it is the output, not an input | notebook 22 |
+| AUC reported on all impressions *and* on viewed impressions only | notebook 22 |
+| NDCG@3/@5 and MRR per session vs the incumbent editorial order, rail CTR, and random | notebook 22 |
+| An ablation that drops the whole rail-identity block, isolating personalization from "a better fixed order" | notebook 22 |
+
+Measured on 537 holdout homepage sessions: **NDCG@5 0.7157 for the ranker against
+0.6791 for the incumbent editorial order — +5.39%**; MRR 0.7147 against 0.6775; holdout
+AUC 0.6345 on viewed impressions.
+
+The ablation that drops **all 13 rail-identity features** loses nothing — NDCG@5 0.7161,
+slightly *up*, Spearman 0.9735 confirming the models differ. **So the whole lift is
+personalization**, not a better fixed order. Rail-level aggregates score on permutation
+importance (an AUC metric) yet cannot reorder rails for one viewer, because within a
+session every viewer sees the same rail-level priors. Note the importance *ordering*
+between the two new tables is not stable run to run and should not be quoted; the stable
+findings are that the two new tables dominate and the shared viewer tables sit at ~zero
+for rail ranking. Reconciled, with multiple runs' numbers, in
+[docs/vertical_ranking.md](docs/vertical_ranking.md), along with why the shared viewer
+tables contribute ~nothing to *rail* ranking and what that does and does not say about
+sharing a feature store.
+
+Those labels come from a latent utility the model can recover, so read the lift as
+evidence the pipeline works rather than a forecast of Crunchyroll's lift.
+
+
+---
+
+## Screenshots — what exists and what is missing
+
+## Screenshots
+
+Twelve screenshots are in `images/`, all captured from the live workspace this demo was
+built on. Twelve more are named below but do not exist yet. They are listed with the
+exact filename to use and the exact place to capture it, so anyone can fill them in and
+the README's `![...]` links will start resolving without any other edit.
+
+### What exists
+
+| File | Shows | Beat |
+|---|---|---|
+| `images/01-catalog-explorer.png` | The `crunchyroll_demo` schema in Catalog Explorer | Step 0 |
+| `images/02-events-table.png` | `engagement_events` sample rows | Step 0 |
+| `images/03-feature-table-viewer.png` | `viewer_features_current` with its PK and feature-table badge | Step 1 |
+| `images/04-online-tables.png` | The three published online tables and their sync state | Step 1 |
+| `images/13-lakebase-project.png` | The `crunchyroll-online-store` Lakebase project | Step 1 |
+| `images/06-pit-proof.png` | The same feature as-of-impression versus as-of-now | Step 2 |
+| `images/08b-model-version-spec.png` | The registered model version with its embedded feature spec | Step 2 |
+| `images/09-endpoint-ready.png` | The ranker endpoint READY, inference tables on | Step 3 |
+| `images/10-query-ranked.png` | 25 candidates in, ranked titles out | Step 4 |
+| `images/11-inference-table.png` | `cr_ranker_inference_payload` | Step 4 |
+| `images/14-freshness-features.png` | The online row for `v0001` before and after | Step 5 |
+| `images/12-freshness-before-after.png` | The candidates whose score moved | Step 5 |
+
+**All twelve were captured on 2026-09-01, before the 2026-09-07/08 corrections.** They
+show the right screens and the right shape, but any number visible in them predates the
+latency fix and the data-clock fix, so read the numbers from this README's text — those
+come from the corrected runs and each has a row in
+[docs/verification_log.md](docs/verification_log.md). Re-capturing them is the cheapest
+outstanding improvement to this repo.
+
+### What is still missing
+
+Nothing below has been captured. The README marks each gap inline as well, so a reader
+never mistakes an absent image for an unwritten step.
+
+| File to create | Capture it from | Prerequisite |
+|---|---|---|
+| `images/05-ondemand-udfs.png` | Catalog Explorer → the schema → **Functions**, showing the four `cr_*` UDFs. Or the output of `DESCRIBE FUNCTION EXTENDED <catalog>.<schema>.cr_hour_affinity_delta` | `ondemand_features` task has run |
+| `images/07-feature-serving-endpoint.png` | **Serving** → `crunchyroll-viewer-features`, showing the served entity is a feature spec, not a model | `feature_serving` task has run |
+| `images/15-retriever-recall.png` | Notebook 08's metrics cell: recall@60 for SVD against popularity and random | `train_retriever` task has run |
+| `images/16-streaming-continuous.png` | Catalog Explorer → `online_session_features`, showing `CONTINUOUS` and a moving `sync_end_timestamp` | `make streaming` is running |
+| `images/17-zerobus-events.png` | `SELECT count(*) FROM engagement_events_stream` climbing while the producer runs | `make streaming` is running |
+| `images/18-agent-trace.png` | The MLflow trace for one answer, showing the `get_viewer_context` tool call and the values it returned | **`make agent` has never been run** |
+| `images/19-app-funnel.png` | The app's funnel strip with its per-hop latency chips | App page has never been opened |
+| `images/20-app-lakebase-panel.png` | The app's raw Lakebase panel: real rows, the SQL, the latency chip | App page has never been opened |
+| `images/21-app-freshness.png` | The app after "watch 3 episodes now": the measured seconds and the re-ranked list | App page has never been opened |
+| `images/22-dashboard.png` | The rendered `crfs_feature_ops` dashboard | Run notebook 13 first, or `sync_health` is legitimately empty |
+| `images/23-ops-report.png` | Notebook 13's operator table | `ops_report` task has run |
+| `images/24-cost.png` | `make cost` output, or the `cost` dashboard widget | 24 h at `CU_1` for a clean steady-state figure |
+
+The prerequisite column is the honest reason each one is missing: seven need nothing but
+someone taking the screenshot after a run that has already succeeded, three need the app
+page opened for the first time, one needs the agent notebook to run at all, and one needs
+a full day of billing at `CU_1`.
+
+Convention if you add more: `images/NN-short-name.png`, where `NN` matches the step
+number in this README, and add a one-line italic caption under the image saying which
+file it is.
+
