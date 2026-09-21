@@ -285,6 +285,77 @@ and the pandas 2.x dtype handling), `00`, `01`, `02`, `02b`, `05`, `10`, `13`, `
 `databricks.yml`, `resources/`, `Makefile`, `deploy_app.sh`, `verify.sh`, and the
 README's numbers against this log.
 
+## 2026-09-18 — pre-demo audit (V61-V66)
+
+Run before the customer readout, against the deployed state rather than against the docs.
+`make verify` passes: 31 assertions, 0 failures, 1 warn (`route_optimized`).
+
+### V61 · Three documents carried v9-era numbers while `@champion` was v10
+
+`ask_alignment.md`, `vertical_ranking.md` and `README.md` quoted model version 9, the v9
+lift (`+0.0514` / +5.1%), the v9 ablation pair (0.7140 -> 0.7169), a superseded spike run
+(p95 383 ms, 5,852 of 11,053 rejected, "zero errors" in recovery) and a stale offline row
+count (421,290). Read from the registry instead of from prose: `@champion` is **10**,
+`ndcg5_lift_vs_baseline` **0.0539**, ablated **0.7161**, Spearman(model, ablated)
+**0.9735**, AUC-viewed **0.6345** on 537 sessions; `viewer_rail_features_ts` holds
+**463,419** rows; the current spike is p50 153 ms / p95 294 ms with **8,770 of 13,988**
+rejected and **4** residual 429s in recovery. All corrected.
+
+The pattern worth keeping: a rerun that improves a number leaves every *other* document
+quoting the number it replaced. The registry is the only trustworthy source for a model's
+own metrics, and it takes one API call to read.
+
+### V62 · Delta CDF `startingVersion` is inclusive, so incremental batch could never work
+
+`make batch-incremental` had never been run. `viewers_with_changed_features` read each
+feature table's change feed from the version the previous run recorded. Verified by query
+rather than by reading docs:
+
+```sql
+SELECT COUNT(*) FROM table_changes('...rail_features', 15)  -- 15 = last scored version
+WHERE _change_type != 'update_preimage'                      -- returns 16
+```
+
+Sixteen rows -- the rows written *by* commit 15, which the previous run already scored. For
+the viewer-grain tables that inflates the rescore set; for `rail_features`, which is
+rail-grain, any change forces a full refresh, so **every incremental run would have fallen
+straight back to a full refresh** while printing that it was incremental. Fixed to read
+from `ver + 1`, with a short-circuit when no commit is newer than the recorded one.
+
+### V63 · An empty changed-viewer list meant "every viewer"
+
+`eligible_rails_all` tested `if viewers:`, which collapses `None` (every viewer) and `[]`
+(no viewer). So an incremental run that found nothing to rescore would print
+`-> incremental: 0 viewers to rescore` and then score the entire population. The write
+path had the same collapse and would have fallen through to a full overwrite. Fixed with
+`if viewers is not None`, an explicit `WHERE 1 = 0` for the empty case, and a write branch
+that leaves the table untouched when nothing moved.
+
+V62 masked V63: the rail-grain full-refresh path fired first, so the truthiness bug was
+never reached. Two defects in the same never-executed code path, each hiding the other.
+
+### V64 · Context movement is a range, not a single number
+
+The docs claimed "up to 9 of 16 collections move" across four contexts. The app computes
+this live and reported **6 / 12 / 9** against the 21:00-on-TV order (09:00 TV, 21:00
+mobile, 09:00 mobile). A direct four-call probe from this laptop, with a different clock
+and day-of-week, gave a worst case of 9. Both are real; the figure depends on which
+context is the baseline. Docs now state **6 to 12 of 16**, and name the baseline.
+
+### V65 · The app's "Sync lag" panel shows permission errors, not sync state
+
+Four rows read `unavailable (User 7430c9b1-... does not have View permissions on pipeline
+...)`. The app's service principal has schema-level UC grants but no `CAN_VIEW` on the
+four synced-table pipelines. Not fixed -- recorded so nobody scrolls onto it live.
+
+### V66 · An unknown `rail_id` returns an empty error
+
+Posting a `rail_id` that is not in `rail_features` fails with
+`Encountered an unexpected error while evaluating the model. ... Error ''` -- the same
+empty-error signature as V54, from a lookup miss rather than a dtype problem. Found by
+inventing plausible-looking rail ids for a probe script. The sixteen real ids are in
+`rails.RAIL_SPECS`; a live demo should read them from the app, never hand-type them.
+
 ## Still to verify
 
 Tracked honestly rather than assumed. Everything above this line was actually run.

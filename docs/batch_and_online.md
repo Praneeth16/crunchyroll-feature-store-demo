@@ -71,9 +71,13 @@ which exist until a request arrives.
 
 Same viewer, same collections, four contexts, scored through the endpoint:
 
-**Up to 9 of 16 collections change position** between contexts. A table precomputed at
-21:00-on-TV is therefore wrong for up to 9 of 16 positions when the same viewer opens the
-app at 09:00 on a phone.
+**5 to 12 of 16 collections change position** between contexts, depending on the baseline
+and on the wall clock. Two runs on 2026-09-18, both against the 21:00-on-TV order:
+09:00 TV moved 6 then 5, 21:00 mobile moved 12 then 7, 09:00 mobile moved 9 both times.
+The spread across runs is itself expected -- two of the five request-time features decay
+with time, so the same four contexts need not separate by the same amount at every clock.
+A table precomputed at 21:00-on-TV is wrong for **up to 12 of 16 positions** when the same
+viewer opens the app in another context.
 
 That is the honest cost of batch, and it is the thing the online store buys back. **The
 Phase 2 argument is not primarily latency — it is personalization that a precomputed
@@ -146,7 +150,7 @@ version that was scoring in batch is the version that gets served. Phase 1 is no
 prototype that gets thrown away; it is the same pipeline with the last mile swapped.
 
 **What Phase 2 adds, measured:** p50 **52 ms** per request against the online store, and
-request-time context that moves up to **9 of 16** collections per viewer. What it costs:
+request-time context that moves up to **12 of 16** collections per viewer. What it costs:
 the online store cannot scale to zero (~$11/day at CU_1 on this workspace) and the
 request-path endpoint bills continuously.
 

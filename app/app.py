@@ -42,6 +42,11 @@ LAKEBASE_ENDPOINT = os.environ.get("LAKEBASE_ENDPOINT", "primary")
 AGENT_ENDPOINT = os.environ.get("AGENT_ENDPOINT", "crunchyroll-explainer-agent")
 ONLINE_STORE = os.environ.get("ONLINE_STORE", "crunchyroll-online-store")
 BURST_JOB_ID = os.environ.get("BURST_JOB_ID", "")
+# The burst job runs two tasks in sequence -- append the events, then recompute
+# recent_behavior_current and refresh its sync. Two serverless task starts plus a
+# sync refresh do not fit in 180s, and a window shorter than the work turns a
+# working demo into a warning.
+BURST_WAIT_S = float(os.environ.get("BURST_WAIT_S", "480"))
 
 FQ = f"{CATALOG}.{SCHEMA}"
 ENDPOINT_PATH = f"projects/{LAKEBASE_PROJECT}/branches/{LAKEBASE_BRANCH}/endpoints/{LAKEBASE_ENDPOINT}"
@@ -561,10 +566,12 @@ st.divider()
 st.header("Freshness: an event now changes the next ranking")
 
 st.caption(
-    "Fires the crfs_event_burst job, then polls the Lakebase row every 250 ms until "
-    "the online value actually moves. The number below is measured, not asserted: "
-    "the events carry the producer's own clock (produced_epoch_ms) and it is read "
-    "back out of Postgres."
+    "Fires the crfs_event_burst job -- which appends the events, then recomputes "
+    "recent_behavior_current and refreshes its sync -- and polls the Lakebase row "
+    "every 250 ms until the online value actually moves. The number below is "
+    "measured, not asserted: the events carry the producer's own clock "
+    "(produced_epoch_ms) and it is read back out of Postgres. This is the TRIGGERED "
+    "path, so expect minutes; `make streaming` is the seconds-scale CONTINUOUS one."
 )
 
 col_a, col_b = st.columns([2, 1])
@@ -607,7 +614,7 @@ if burst_button:
         t0 = time.time()
         changed_at = None
         after_val = before_val
-        while time.time() - t0 < 180:
+        while time.time() - t0 < BURST_WAIT_S:
             elapsed = time.time() - t0
             try:
                 row, cols, _ = store.keyed_read(
@@ -625,8 +632,11 @@ if burst_button:
         if changed_at is None:
             st.warning(
                 f"`{watch_col}` had not changed after {time.time() - t0:0.0f}s. The burst job "
-                "appends events, but a TRIGGERED table only moves when notebook 05 or 10 "
-                "recomputes and refreshes it -- run `make streaming` for the continuous path."
+                "appends the events and then recomputes and refreshes this TRIGGERED table, "
+                "so check the job run above -- if its `recompute_and_refresh` task is still "
+                "running, the value simply has not landed yet. For a path that moves in "
+                "seconds rather than minutes, run `make streaming`, which publishes "
+                "session_features_current CONTINUOUS."
             )
         else:
             placeholder.metric("online value changed after", f"{changed_at:0.2f} s",

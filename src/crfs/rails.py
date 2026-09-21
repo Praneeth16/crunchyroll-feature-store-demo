@@ -739,10 +739,17 @@ def eligible_rails_all(spark, fq: str, viewers=None, as_of=None):
         [(v, bool(has_watchlist(v))) for v in vids],
         ["viewer_id", "has_watchlist"]).createOrReplaceTempView("viewer_watchlist_flag")
 
+    # `viewers is None` means every viewer; an empty list means no viewer. Testing
+    # truthiness collapses those two, and the collapse is silent: an incremental run
+    # that found nothing to rescore would rescore the whole population and still print
+    # "0 viewers to rescore".
     viewer_filter = ""
-    if viewers:
-        ids = ",".join(f"'{v}'" for v in viewers)
-        viewer_filter = f"WHERE v.viewer_id IN ({ids})"
+    if viewers is not None:
+        if not viewers:
+            viewer_filter = "WHERE 1 = 0"
+        else:
+            ids = ",".join(f"'{v}'" for v in viewers)
+            viewer_filter = f"WHERE v.viewer_id IN ({ids})"
 
     return spark.sql(ELIGIBLE_RAILS_ALL_SQL.format(
         fq=fq, clock_expr=clock_expr, inprogress_days=INPROGRESS_DAYS,

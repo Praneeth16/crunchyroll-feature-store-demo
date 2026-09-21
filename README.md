@@ -322,7 +322,7 @@ feature store — two models with different grains and different labels.
 | `recent_behavior_current` | viewer_id | triggered | ✅ | **reused unchanged** |
 | `title_features` | title_id | daily | ✅ | **reused** (rail content stats) |
 | `rail_features` | rail_id | daily | ✅ | new — 16 rows |
-| `viewer_rail_features_ts` | viewer_id + rail_id (+ ts) | 421,290 daily snapshots | ✅ **4,681 rows, one per key** | new |
+| `viewer_rail_features_ts` | viewer_id + rail_id (+ ts) | 463,419 daily snapshots | ✅ **4,681 rows, one per key** | new |
 
 Plus three new request-time UDFs (`cr_rail_taste_match`, `cr_rail_click_recency`,
 `cr_device_rail_fit`) and **two reused verbatim** from the watch-next ranker
@@ -336,9 +336,9 @@ point-in-time. Publishing it **deduplicates to the latest row per
 `(viewer_id, rail_id)`** — measured on this workspace:
 
 ```
-offline: 421,290 rows across 4,681 (viewer, rail) keys
+offline: 463,419 rows across 4,681 (viewer, rail) keys
 online:  4,681 rows
-one row per key confirmed; online is 90x smaller
+one row per key confirmed; online is ~99x smaller
 ```
 
 and the synced table's own spec came back as
@@ -367,18 +367,18 @@ to 0.09 at position 16**. Fit that raw and the model learns the old homepage.
 | NDCG@3/@5 and MRR per session vs the incumbent editorial order, rail CTR, and random | notebook 22 |
 | An ablation that drops the whole rail-identity block, isolating personalization from "a better fixed order" | notebook 22 |
 
-Measured on 511 holdout homepage sessions: **NDCG@5 0.7065 for the ranker against
-0.6751 for the incumbent editorial order — +4.7%**; MRR 0.7100 against 0.6770; holdout
-AUC 0.6228 on viewed impressions.
+Measured on 537 holdout homepage sessions: **NDCG@5 0.7157 for the ranker against
+0.6791 for the incumbent editorial order — +5.39%**; MRR 0.7147 against 0.6775; holdout
+AUC 0.6345 on viewed impressions.
 
-The ablation that drops **all 13 rail-identity features** loses nothing — NDCG@5 0.7073,
-slightly *up*, Spearman 0.971 confirming the models differ. **So the whole lift is
+The ablation that drops **all 13 rail-identity features** loses nothing — NDCG@5 0.7161,
+slightly *up*, Spearman 0.9735 confirming the models differ. **So the whole lift is
 personalization**, not a better fixed order. Rail-level aggregates score on permutation
 importance (an AUC metric) yet cannot reorder rails for one viewer, because within a
 session every viewer sees the same rail-level priors. Note the importance *ordering*
 between the two new tables is not stable run to run and should not be quoted; the stable
 findings are that the two new tables dominate and the shared viewer tables sit at ~zero
-for rail ranking. Reconciled, with both runs' numbers, in
+for rail ranking. Reconciled, with multiple runs' numbers, in
 [docs/vertical_ranking.md](docs/vertical_ranking.md), along with why the shared viewer
 tables contribute ~nothing to *rail* ranking and what that does and does not say about
 sharing a feature store.

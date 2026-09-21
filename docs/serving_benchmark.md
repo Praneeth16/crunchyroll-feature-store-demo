@@ -1,6 +1,6 @@
 # Rail-ranking endpoint — measured serving characteristics
 
-Measured 2026-09-17 09:54 UTC from **in_region_job** (client in the same region as the endpoint).
+Measured 2026-09-17 09:54 UTC from **in_region_job** (client in the same region as the endpoint), against served entity `rail_ranker-10`, model version **10**.
 
 Configuration: endpoint `crunchyroll-rail-ranker` · route_optimized=False · scale_to_zero=False · provisioned_concurrency=4-32
 

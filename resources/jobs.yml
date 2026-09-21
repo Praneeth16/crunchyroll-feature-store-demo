@@ -321,6 +321,20 @@ resources:
               n_events: "3"
               viewer_id: v0001
           timeout_seconds: 600
+        # Appending events is not enough on its own. recent_behavior_current is a
+        # TRIGGERED table, so the online row only moves when something recomputes it
+        # and refreshes the sync -- which is notebook 05's job. Without this task the
+        # app's burst button fires, waits, and correctly reports that nothing changed.
+        - task_key: recompute_and_refresh
+          depends_on:
+            - task_key: burst
+          notebook_task:
+            notebook_path: ../notebooks/05_freshness_triggered.py
+            base_parameters:
+              <<: *common_params
+              n_events: "3"
+              viewer_id: v0001
+          timeout_seconds: 900
 
     crfs_agent:
       name: crfs_agent

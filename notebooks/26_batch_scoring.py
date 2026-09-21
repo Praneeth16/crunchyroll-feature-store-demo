@@ -101,9 +101,20 @@ def viewers_with_changed_features(since_version_by_table: dict) -> list:
     ids = set()
     for tbl, ver in since_version_by_table.items():
         try:
+            # `startingVersion` is inclusive -- verified against this workspace:
+            # table_changes('rail_features', 15) returns the 16 rows written *by*
+            # commit 15, which is the commit the previous run already scored. Reading
+            # from `ver` therefore re-reports the last run's own writes, and for the
+            # rail-grain table that alone forces a full refresh on every incremental
+            # run. The last scored version is `ver`, so changes start at `ver + 1`.
+            latest = int(spark.sql(f"DESCRIBE HISTORY {cfg.t(tbl)} LIMIT 1")
+                         .first()["version"])
+            if ver >= latest:
+                print(f"  {tbl}: no commits since version {ver}")
+                continue
             cdf = (spark.read.format("delta")
                    .option("readChangeFeed", "true")
-                   .option("startingVersion", ver)
+                   .option("startingVersion", ver + 1)
                    .table(cfg.t(tbl)))
             if "viewer_id" not in cdf.columns:
                 # rail_features is keyed by rail_id: any change to it affects EVERY
@@ -241,7 +252,11 @@ if TOP_N:
 
 t_write = time.perf_counter()
 out_full = cfg.t(OUT)
-if MODE == "incremental" and target_viewers:
+if MODE == "incremental" and target_viewers is not None and not target_viewers:
+    # Nothing moved since the last run. The correct action is to leave the table
+    # alone -- an overwrite here would rewrite the whole table from an empty frame.
+    print("no viewers changed since the last run; leaving the table untouched")
+elif MODE == "incremental" and target_viewers:
     # Replace only the viewers this run rescored. replaceWhere keeps the rest of the
     # table intact, which is what makes a minutes-cadence refresh cheap.
     ids = ",".join(f"'{v}'" for v in target_viewers)
