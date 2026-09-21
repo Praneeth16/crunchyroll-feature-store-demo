@@ -117,6 +117,28 @@ account team **before** any tighter latency commitment depends on it.
 
 ---
 
+## 7 · The point-in-time claim was only true of one table
+
+Recorded here because it changes how the POC's own evidence should be read, not just what
+the code does. Three of the rail ranker's four feature lookups had no timestamp, and
+`rail_features` carries aggregates of the label — so the ranking metrics the first readout
+quoted were invalid, not conservative. `verification_log.md` V76 has the full account.
+
+Fixed: `recent_behavior_ts` and `rail_features_ts` are built and published, every lookup is
+as-of, and the lookup set is defined once in `rails.rail_lookups()`. Serving values are
+unchanged, because a published time series table deduplicates to the latest row per key.
+
+**What this leaves open:** the corrected numbers are lower than the withdrawn ones, and by
+how much is the only honest answer to "does vertical ranking beat the editorial order on
+this data". Read the re-measured figures in `vertical_ranking.md`, and treat the original
+lift as what it was — a measurement of a leak.
+
+The generalisable lesson for Crunchyroll's own build: **a feature table whose columns are
+aggregates of the label cannot be looked up without a timestamp.** `rail_ctr_30d` is the
+obvious case; anything derived from engagement is the same case.
+
+---
+
 ## Closed since the first draft
 
 * **Title features shared only at source-data level.** The rail content stats were

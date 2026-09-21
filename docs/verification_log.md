@@ -543,3 +543,68 @@ the offending column instead of letting pandas raise from inside a cast.
 
 **The general lesson, twice now:** a list derived by exclusion silently absorbs whatever
 gets added upstream. The curated list is the one that fails loudly.
+
+### V76 · Three of four rail-ranker lookups were not point-in-time, and one of them leaked the label
+
+**The most consequential defect found in this repo, and it predates the advanced track.**
+
+`notebooks/20_vertical/22_train_rail_ranker.py` built its training set with four
+`FeatureLookup`s. Only `viewer_rail_features_ts` carried a `timestamp_lookup_key`. The
+other three — `viewer_features_current`, `recent_behavior_current`, `rail_features` — are
+one-row-per-key tables, so **every historical label, including the ten-day holdout, was
+joined to today's feature values.**
+
+For the two viewer tables that is ordinary leakage: a three-week-old impression was scored
+with what the viewer did last night. For `rail_features` it is categorically worse.
+`rail_ctr_30d` and `rail_clicks_30d` are `SUM(engaged)` and its ratio, computed over the
+full impression log — the same `engaged` column the model predicts. A holdout impression's
+own click was inside its own features. Metrics computed that way are **invalid, not
+optimistic**, and the repo was claiming point-in-time correctness on the strength of the
+one lookup that had it.
+
+Why it survived review until now: the POC *does* have a real point-in-time story
+(`viewer_rail_features_ts`, its own probe notebook `02b`, and a documented as-of join), and
+that story is true of the table it was written about. The three lookups beside it were
+never checked against the same standard.
+
+**What it took to fix, which is the interesting part:** the point-in-time sources did not
+exist. `recent_behavior_current` and `rail_features` are as-of-now aggregates, so there was
+nothing to look up historically. Both are now built as daily snapshot tables
+(`recent_behavior_ts`, `rail_features_ts`), published online where a time series table
+deduplicates to the latest row per key — measured: 27,300 offline rows over 91 days become
+300 online, one per viewer, matching `online_recent_behavior` exactly. **Serving values do
+not change; only the training join does.** This is the collapse the README already
+recommended for the horizontal tables.
+
+The lookup set now lives in `rails.rail_lookups()`. Notebooks 22 and 32 had two copies and
+had already drifted, which is how the GPU path inherited the same leakage by construction.
+
+### V77 · Both new snapshot builders had the same unbounded-window bug
+
+Found by testing the builders rather than by reading them, and the fixture is now in place:
+
+* `build_recent_behavior` filtered `event_ts > as_of - 24h` with **no upper bound**.
+* `RAIL_AUDIENCE_SQL` filtered `rendered_ts > cutoff` with **no upper bound**.
+
+Both are correct when `as_of` is the end of the data, which is the only way they had ever
+been called. Called per-day to build a snapshot table, they include the future: on a
+three-day fixture the 1 September snapshot carried 3 September's minutes (35.0 instead of
+10.0). A window meant to remove leakage that quietly reintroduces it is worse than no
+window at all, because the table's name asserts the opposite.
+
+Both bounded at both ends, and the recent-behaviour case is pinned by a fixture with
+hand-computed expectations for all six (viewer, day) cells.
+
+### V78 · Two preview-API failures that only a long run finds
+
+* `MlflowClient.search_registered_models(filter_string=...)` raises
+  `MlflowException: Argument 'filter_string' is unsupported for models in the Unity
+  Catalog` — after 44 minutes of useful work in the cells above it. The SDK's
+  `w.registered_models.list(catalog_name=..., schema_name=...)` takes catalog and schema
+  directly and returns the five models in this schema.
+* `fe.score_batch` on the torch model fails with `ModuleNotFoundError: No module named
+  'torch'`, reported as a `PythonException` from `mlflow/pyfunc` inside a Spark UDF.
+  score_batch evaluates the model in an executor, whose environment is not the notebook's;
+  `env_manager="virtualenv"` rebuilds the logged environment there. The sklearn model needs
+  none of this, which is why the difference is invisible until a torch model appears. Model
+  Serving is unaffected — it builds the model's environment when it deploys.
