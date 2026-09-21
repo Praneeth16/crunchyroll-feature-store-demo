@@ -560,7 +560,7 @@ happens. The test ran and the serial model was simply wrong: the slope is zero.
 
 **Corrected after a deliberate measurement.** A ten-minute sustained-load phase was added
 specifically to measure how long capacity takes to arrive. In the current run it has been
-moved ahead of the ramp (Phase 1b, before the concurrency sweep, see `notebooks/25_serving_benchmark.py`
+moved ahead of the ramp (Phase 1b, before the concurrency sweep, see `notebooks/90_ops/25_serving_benchmark.py`
 lines ~138–176), and it still reports flat ~200 req/s from its very first 30-second window with
 scale_up_factor **1.0** and seconds_to_90pct_of_best **0**. This means capacity arriving
 over minutes is **not** supported by the current run. The two regimes visible in the full run

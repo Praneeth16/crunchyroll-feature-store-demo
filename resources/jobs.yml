@@ -49,14 +49,14 @@ resources:
       tasks:
         - task_key: generate_data
           notebook_task:
-            notebook_path: ../notebooks/00_data_generation.py
+            notebook_path: ../notebooks/00_shared/00_data_generation.py
             base_parameters: *common_params
           timeout_seconds: 2400
 
         - task_key: build_features
           depends_on: [{task_key: generate_data}]
           notebook_task:
-            notebook_path: ../notebooks/01_feature_engineering.py
+            notebook_path: ../notebooks/00_shared/01_feature_engineering.py
             base_parameters: *common_params
           timeout_seconds: 3600
 
@@ -64,14 +64,14 @@ resources:
         - task_key: pit_probe
           depends_on: [{task_key: build_features}]
           notebook_task:
-            notebook_path: ../notebooks/02b_pit_probe.py
+            notebook_path: ../notebooks/10_horizontal/02b_pit_probe.py
             base_parameters: *common_params
           timeout_seconds: 900
 
         - task_key: train_ranker
           depends_on: [{task_key: build_features}]
           notebook_task:
-            notebook_path: ../notebooks/02_train_ranker.py
+            notebook_path: ../notebooks/10_horizontal/02_train_ranker.py
             base_parameters: *common_params
           timeout_seconds: 2400
 
@@ -80,21 +80,21 @@ resources:
         - task_key: train_retriever
           depends_on: [{task_key: build_features}]
           notebook_task:
-            notebook_path: ../notebooks/08_retrieval_ranker.py
+            notebook_path: ../notebooks/10_horizontal/08_retrieval_ranker.py
             base_parameters: *common_params
           timeout_seconds: 3600
 
         - task_key: deploy_ranker
           depends_on: [{task_key: train_ranker}]
           notebook_task:
-            notebook_path: ../notebooks/03_deploy_ranker_endpoint.py
+            notebook_path: ../notebooks/10_horizontal/03_deploy_ranker_endpoint.py
             base_parameters: *common_params
           timeout_seconds: 3600
 
         - task_key: smoke_query
           depends_on: [{task_key: deploy_ranker}]
           notebook_task:
-            notebook_path: ../notebooks/04_query_ranker.py
+            notebook_path: ../notebooks/10_horizontal/04_query_ranker.py
             base_parameters: *common_params
           timeout_seconds: 1800
 
@@ -102,14 +102,14 @@ resources:
         - task_key: ondemand_features
           depends_on: [{task_key: smoke_query}]
           notebook_task:
-            notebook_path: ../notebooks/06_ondemand_features.py
+            notebook_path: ../notebooks/10_horizontal/06_ondemand_features.py
             base_parameters: *common_params
           timeout_seconds: 2400
 
         - task_key: deploy_ranker_v2
           depends_on: [{task_key: ondemand_features}]
           notebook_task:
-            notebook_path: ../notebooks/03_deploy_ranker_endpoint.py
+            notebook_path: ../notebooks/10_horizontal/03_deploy_ranker_endpoint.py
             base_parameters: *common_params
           timeout_seconds: 3600
 
@@ -117,14 +117,14 @@ resources:
         - task_key: feature_serving
           depends_on: [{task_key: ondemand_features}]
           notebook_task:
-            notebook_path: ../notebooks/07_feature_serving.py
+            notebook_path: ../notebooks/10_horizontal/07_feature_serving.py
             base_parameters: *common_params
           timeout_seconds: 3600
 
         - task_key: freshness_triggered
           depends_on: [{task_key: deploy_ranker_v2}]
           notebook_task:
-            notebook_path: ../notebooks/05_freshness_triggered.py
+            notebook_path: ../notebooks/10_horizontal/05_freshness_triggered.py
             base_parameters: *common_params
           timeout_seconds: 2400
 
@@ -134,7 +134,7 @@ resources:
             - {task_key: feature_serving}
             - {task_key: train_retriever}
           notebook_task:
-            notebook_path: ../notebooks/13_ops_and_cost.py
+            notebook_path: ../notebooks/90_ops/13_ops_and_cost.py
             base_parameters: *common_params
           timeout_seconds: 1800
 
@@ -162,21 +162,21 @@ resources:
         # logs describe one history rather than two unrelated ones.
         - task_key: rail_data
           notebook_task:
-            notebook_path: ../notebooks/20_rail_data_generation.py
+            notebook_path: ../notebooks/20_vertical/20_rail_data_generation.py
             base_parameters: *common_params
           timeout_seconds: 2400
 
         - task_key: rail_features
           depends_on: [{task_key: rail_data}]
           notebook_task:
-            notebook_path: ../notebooks/21_rail_features.py
+            notebook_path: ../notebooks/20_vertical/21_rail_features.py
             base_parameters: *common_params
           timeout_seconds: 3600
 
         - task_key: train_rail_ranker
           depends_on: [{task_key: rail_features}]
           notebook_task:
-            notebook_path: ../notebooks/22_train_rail_ranker.py
+            notebook_path: ../notebooks/20_vertical/22_train_rail_ranker.py
             base_parameters:
               <<: *common_params
               # See the widget comment in the notebook: at 1.0 the point-in-time join
@@ -191,7 +191,7 @@ resources:
         - task_key: deploy_rail_endpoint
           depends_on: [{task_key: train_rail_ranker}]
           notebook_task:
-            notebook_path: ../notebooks/23_deploy_rail_endpoint.py
+            notebook_path: ../notebooks/20_vertical/23_deploy_rail_endpoint.py
             base_parameters: *common_params
           # Route optimization is create-time only, so a first deployment here can
           # include a delete-and-recreate plus a container build.
@@ -202,7 +202,7 @@ resources:
         - task_key: homepage_assembly
           depends_on: [{task_key: deploy_rail_endpoint}]
           notebook_task:
-            notebook_path: ../notebooks/24_homepage_assembly.py
+            notebook_path: ../notebooks/20_vertical/24_homepage_assembly.py
             base_parameters: *common_params
           timeout_seconds: 1800
 
@@ -224,7 +224,7 @@ resources:
       tasks:
         - task_key: benchmark
           notebook_task:
-            notebook_path: ../notebooks/25_serving_benchmark.py
+            notebook_path: ../notebooks/90_ops/25_serving_benchmark.py
             base_parameters:
               <<: *common_params
               bench_ramp_levels: "1,2,4,8,16,32,64"
@@ -258,7 +258,7 @@ resources:
       tasks:
         - task_key: batch_score
           notebook_task:
-            notebook_path: ../notebooks/26_batch_scoring.py
+            notebook_path: ../notebooks/20_vertical/26_batch_scoring.py
             base_parameters:
               <<: *common_params
               batch_mode: "full"
@@ -289,13 +289,13 @@ resources:
       tasks:
         - task_key: streaming_aggregate
           notebook_task:
-            notebook_path: ../notebooks/10_streaming_continuous.py
+            notebook_path: ../notebooks/40_streaming/10_streaming_continuous.py
             base_parameters: *common_params
           timeout_seconds: 5400
         - task_key: produce_events
           environment_key: zerobus
           notebook_task:
-            notebook_path: ../notebooks/11_event_producer.py
+            notebook_path: ../notebooks/40_streaming/11_event_producer.py
             base_parameters:
               <<: *common_params
               mode: loop
@@ -314,7 +314,7 @@ resources:
       tasks:
         - task_key: burst
           notebook_task:
-            notebook_path: ../notebooks/11_event_producer.py
+            notebook_path: ../notebooks/40_streaming/11_event_producer.py
             base_parameters:
               <<: *common_params
               mode: burst
@@ -329,7 +329,7 @@ resources:
           depends_on:
             - task_key: burst
           notebook_task:
-            notebook_path: ../notebooks/05_freshness_triggered.py
+            notebook_path: ../notebooks/10_horizontal/05_freshness_triggered.py
             base_parameters:
               <<: *common_params
               n_events: "3"
@@ -348,7 +348,7 @@ resources:
       tasks:
         - task_key: agent
           notebook_task:
-            notebook_path: ../notebooks/12_agent_explain.py
+            notebook_path: ../notebooks/50_agent/12_agent_explain.py
             base_parameters:
               <<: *common_params
               auth_mode: resource
@@ -366,7 +366,7 @@ resources:
       tasks:
         - task_key: teardown
           notebook_task:
-            notebook_path: ../notebooks/99_teardown.py
+            notebook_path: ../notebooks/90_ops/99_teardown.py
             base_parameters:
               <<: *common_params
               cost_only: "true"

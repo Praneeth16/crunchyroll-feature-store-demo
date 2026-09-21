@@ -259,7 +259,7 @@ quietly omitted.
 
 **Status: fixed in source. The endpoint carries the fix only after `train_ranker` and `deploy_ranker` re-run, because the encoder is pickled into the served pyfunc. Kept here because the second instance of it was only found by fixing the first.**
 
-`notebooks/02_train_ranker.py` builds its feature matrix with the same pattern that
+`notebooks/10_horizontal/02_train_ranker.py` builds its feature matrix with the same pattern that
 broke the rail ranker at serving time:
 
 ```python
@@ -279,8 +279,8 @@ lookup returns nothing for a column rather than a null.
 mean rebuilding and redeploying a working horizontal path. That reasoning stopped applying
 the moment the horizontal path was rebuilt anyway (to clear a data-clock drift and a
 missing retriever endpoint), so the fix went in with it: both encoder sites in
-`notebooks/02_train_ranker.py` now build an explicit
-`pd.Series(0.0, index=df.index)`, mirroring `notebooks/22_train_rail_ranker.py`.
+`notebooks/10_horizontal/02_train_ranker.py` now build an explicit
+`pd.Series(0.0, index=df.index)`, mirroring `notebooks/20_vertical/22_train_rail_ranker.py`.
 
 **Fixing it surfaced a second instance the original write-up had missed.** This section
 described only the numeric branch. The categorical branch has the identical defect:

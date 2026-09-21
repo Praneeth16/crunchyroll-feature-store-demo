@@ -130,19 +130,19 @@ says so rather than silently producing a partially-stale table.
 **Phase 1 — now, GCP us-west1, no online store**
 
 ```
-notebooks/00,01      feature engineering        → Delta feature tables in UC
-notebooks/20,21      rail/collection features   → Delta feature tables in UC
-notebooks/22         PIT training set + model   → registered in Unity Catalog
-notebooks/26         score_batch                → rail_rankings_batch (Delta)
-                     make batch-incremental     → minutes cadence via CDF
+00_shared/00,01     feature engineering        → Delta feature tables in UC
+20_vertical/20,21   rail/collection features   → Delta feature tables in UC
+20_vertical/22      PIT training set + model   → registered in Unity Catalog
+20_vertical/26      score_batch                → rail_rankings_batch (Delta)
+                    make batch-incremental     → minutes cadence via CDF
 ```
 No Lakebase. No serving endpoint. Their homepage service reads the precomputed table.
 
 **Phase 2 — when Lakebase is available in their region**
 
 ```
-notebooks/21         publish_table(...)         → the same tables, published online
-notebooks/23         deploy the same version    → crunchyroll-rail-ranker endpoint
+20_vertical/21      publish_table(...)         → the same tables, published online
+20_vertical/23      deploy the same version    → crunchyroll-rail-ranker endpoint
 ```
 
 Nothing in the feature definitions, the training set, or the model changes. The model

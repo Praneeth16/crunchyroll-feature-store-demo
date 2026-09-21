@@ -55,7 +55,15 @@
 dbutils.library.restartPython()
 # COMMAND ----------
 import os, sys
-_root = os.path.abspath(os.path.join(os.getcwd(), ".."))
+# Walk up to the repo root instead of assuming a depth. These notebooks sit in
+# track folders (00_shared, 10_horizontal, ...), and the previous
+# `os.getcwd()/".."` resolved to notebooks/ the moment one moved -- which fails as
+# ModuleNotFoundError: src, from a line that looks like boilerplate.
+_root = os.getcwd()
+while _root != "/" and not os.path.isdir(os.path.join(_root, "src", "crfs")):
+    _root = os.path.dirname(_root)
+assert os.path.isdir(os.path.join(_root, "src", "crfs")), \
+    f"src/crfs not found above {os.getcwd()} -- is the bundle's whole file tree synced?"
 if _root not in sys.path:
     sys.path.insert(0, _root)
 
@@ -341,7 +349,7 @@ dbutils.notebook.exit(json.dumps({
                          "session_features_current", "title_features"],
     "new_feature_tables": ["rail_features", "viewer_rail_features_ts"],
     "online_tables": [{"table": d, "action": a} for _, d, a in published],
-    "latency_measured_by": "notebooks/25_serving_benchmark.py (make bench)",
+    "latency_measured_by": "notebooks/90_ops/25_serving_benchmark.py (make bench)",
     "sync": [{k: s.get(k) for k in ("name", "detailed_state", "last_processed_commit_version")}
              for s in summaries],
 }))

@@ -264,27 +264,27 @@ change), `crfs_streaming` (producer ‖ streaming aggregate + CONTINUOUS publish
 
 | # | Notebook | Job task key | What it establishes |
 |---|---|---|---|
-| 00 | `notebooks/00_data_generation.py` | `generate_data` | Synthetic catalog, viewers, entitlements, 90 days of engagement, plus an empty live-events table |
-| 01 | `notebooks/01_feature_engineering.py` | `build_features` | Four feature tables, the Lakebase online store, three published online tables |
-| 02b | `notebooks/02b_pit_probe.py` | `pit_probe` | Point-in-time correctness, standalone |
-| 02 | `notebooks/02_train_ranker.py` | `train_ranker` | PIT training set, ranker v1, feature spec inside the model |
-| 03 | `notebooks/03_deploy_ranker_endpoint.py` | `deploy_ranker`, then `deploy_ranker_v2` | Serving endpoint + AI Gateway inference table. The same notebook runs twice with a different `model_version` |
-| 04 | `notebooks/04_query_ranker.py` | `smoke_query` | Keys and context in, ranked titles out; honest latency numbers |
-| 06 | `notebooks/06_ondemand_features.py` | `ondemand_features` | Four UC Python UDFs, retrain to ranker v2 |
-| 07 | `notebooks/07_feature_serving.py` | `feature_serving` | Feature spec + Feature Serving endpoint, no model in the path |
-| 08 | `notebooks/08_retrieval_ranker.py` | `train_retriever` | SVD retriever, its own published feature table, the funnel |
-| 05 | `notebooks/05_freshness_triggered.py` | `freshness_triggered` | TRIGGERED freshness: event → feature → online → different ranking |
-| 13 | `notebooks/13_ops_and_cost.py` | `ops_report` | Sync health, capacity, verified cost |
-| 10 | `notebooks/10_streaming_continuous.py` | `streaming_aggregate` (job `crfs_streaming`) | CONTINUOUS freshness with a measured event→online latency |
-| 11 | `notebooks/11_event_producer.py` | `produce_events` (`crfs_streaming`), `burst` (`crfs_event_burst`) | Event producer: burst, loop, or Zerobus gRPC |
-| 12 | `notebooks/12_agent_explain.py` | `agent` (job `crfs_agent`) | Agent whose tool is the Feature Serving endpoint |
-| 20 | `notebooks/20_rail_data_generation.py` | `rail_data` (job `crfs_vertical`) | Rail catalog, rail × title map, the homepage impression log with position bias, and the measured propensity table |
-| 21 | `notebooks/21_rail_features.py` | `rail_features` (`crfs_vertical`) | `rail_features` + `viewer_rail_features_ts`, both published to the same online store; asserts the online copy is one row per key |
-| 22 | `notebooks/22_train_rail_ranker.py` | `train_rail_ranker` (`crfs_vertical`) | Point-in-time training set, IPS-weighted fit, NDCG against three baselines plus an ablation, logged with its feature spec and registered |
-| 23 | `notebooks/23_deploy_rail_endpoint.py` | `deploy_rail_endpoint` (`crfs_vertical`) | The request-path endpoint — no scale-to-zero, provisioned concurrency, route optimization — and a record of what it actually got |
-| 24 | `notebooks/24_homepage_assembly.py` | `homepage_assembly` (`crfs_vertical`) | A whole homepage from both rankers; shared-table overlap resolved from UC; four-context sensitivity check |
-| 25 | `notebooks/25_serving_benchmark.py` | `benchmark` (job `crfs_benchmark`) | fanout, concurrency ramp, traffic spike, feature-serving comparison, server-side attribution |
-| 99 | `notebooks/99_teardown.py` | `teardown` (job `crfs_teardown`) | Stop the money, from the UI |
+| 00 | `notebooks/00_shared/00_data_generation.py` | `generate_data` | Synthetic catalog, viewers, entitlements, 90 days of engagement, plus an empty live-events table |
+| 01 | `notebooks/00_shared/01_feature_engineering.py` | `build_features` | Four feature tables, the Lakebase online store, three published online tables |
+| 02b | `notebooks/10_horizontal/02b_pit_probe.py` | `pit_probe` | Point-in-time correctness, standalone |
+| 02 | `notebooks/10_horizontal/02_train_ranker.py` | `train_ranker` | PIT training set, ranker v1, feature spec inside the model |
+| 03 | `notebooks/10_horizontal/03_deploy_ranker_endpoint.py` | `deploy_ranker`, then `deploy_ranker_v2` | Serving endpoint + AI Gateway inference table. The same notebook runs twice with a different `model_version` |
+| 04 | `notebooks/10_horizontal/04_query_ranker.py` | `smoke_query` | Keys and context in, ranked titles out; honest latency numbers |
+| 06 | `notebooks/10_horizontal/06_ondemand_features.py` | `ondemand_features` | Four UC Python UDFs, retrain to ranker v2 |
+| 07 | `notebooks/10_horizontal/07_feature_serving.py` | `feature_serving` | Feature spec + Feature Serving endpoint, no model in the path |
+| 08 | `notebooks/10_horizontal/08_retrieval_ranker.py` | `train_retriever` | SVD retriever, its own published feature table, the funnel |
+| 05 | `notebooks/10_horizontal/05_freshness_triggered.py` | `freshness_triggered` | TRIGGERED freshness: event → feature → online → different ranking |
+| 13 | `notebooks/90_ops/13_ops_and_cost.py` | `ops_report` | Sync health, capacity, verified cost |
+| 10 | `notebooks/40_streaming/10_streaming_continuous.py` | `streaming_aggregate` (job `crfs_streaming`) | CONTINUOUS freshness with a measured event→online latency |
+| 11 | `notebooks/40_streaming/11_event_producer.py` | `produce_events` (`crfs_streaming`), `burst` (`crfs_event_burst`) | Event producer: burst, loop, or Zerobus gRPC |
+| 12 | `notebooks/50_agent/12_agent_explain.py` | `agent` (job `crfs_agent`) | Agent whose tool is the Feature Serving endpoint |
+| 20 | `notebooks/20_vertical/20_rail_data_generation.py` | `rail_data` (job `crfs_vertical`) | Rail catalog, rail × title map, the homepage impression log with position bias, and the measured propensity table |
+| 21 | `notebooks/20_vertical/21_rail_features.py` | `rail_features` (`crfs_vertical`) | `rail_features` + `viewer_rail_features_ts`, both published to the same online store; asserts the online copy is one row per key |
+| 22 | `notebooks/20_vertical/22_train_rail_ranker.py` | `train_rail_ranker` (`crfs_vertical`) | Point-in-time training set, IPS-weighted fit, NDCG against three baselines plus an ablation, logged with its feature spec and registered |
+| 23 | `notebooks/20_vertical/23_deploy_rail_endpoint.py` | `deploy_rail_endpoint` (`crfs_vertical`) | The request-path endpoint — no scale-to-zero, provisioned concurrency, route optimization — and a record of what it actually got |
+| 24 | `notebooks/20_vertical/24_homepage_assembly.py` | `homepage_assembly` (`crfs_vertical`) | A whole homepage from both rankers; shared-table overlap resolved from UC; four-context sensitivity check |
+| 25 | `notebooks/90_ops/25_serving_benchmark.py` | `benchmark` (job `crfs_benchmark`) | fanout, concurrency ramp, traffic spike, feature-serving comparison, server-side attribution |
+| 99 | `notebooks/90_ops/99_teardown.py` | `teardown` (job `crfs_teardown`) | Stop the money, from the UI |
 
 Task keys matter in practice: a failure on the run page names the task, and
 `databricks bundle run crfs_end_to_end --only <task_key>` re-runs just that one.
@@ -453,7 +453,7 @@ number that will be wrong by next week.
 
 ## Step 0 · Raw signals
 
-`notebooks/00_data_generation.py` writes five tables into
+`notebooks/00_shared/00_data_generation.py` writes five tables into
 `serverless_lakebase_praneeth_catalog.crunchyroll_demo`, every one with Change Data Feed
 enabled:
 
@@ -490,7 +490,7 @@ hours" online features were a week older than the wall clock the freshness beat 
 
 ## Step 1 · Define once, publish to Lakebase
 
-`notebooks/01_feature_engineering.py` builds four feature tables from definitions that
+`notebooks/00_shared/01_feature_engineering.py` builds four feature tables from definitions that
 live in `src/crfs/features.py` — imported here and by `05_freshness_triggered.py` and
 `10_streaming_continuous.py`. That sharing is not tidiness: the first version re-derived
 the recent-behaviour maths separately in 01 and 05, which is exactly the
@@ -580,10 +580,10 @@ One gotcha worth knowing: connect to the endpoint's **direct** host. The
 
 ## Step 2 · Point-in-time training
 
-`notebooks/02_train_ranker.py` opens with the proof: a sample of impressions joined
+`notebooks/10_horizontal/02_train_ranker.py` opens with the proof: a sample of impressions joined
 against `viewer_features_ts` with `timestamp_lookup_key="ts"`, printing feature values
 **at impression time** beside today's values.
-`notebooks/02b_pit_probe.py` is the same proof standalone, so it can be shown without
+`notebooks/10_horizontal/02b_pit_probe.py` is the same proof standalone, so it can be shown without
 the training run around it.
 
 ![PIT proof](images/06-pit-proof.png)
@@ -606,7 +606,7 @@ feature spec.*
 
 ## Step 3–4 · Serving with automatic feature lookup
 
-`notebooks/03_deploy_ranker_endpoint.py` creates the endpoint
+`notebooks/10_horizontal/03_deploy_ranker_endpoint.py` creates the endpoint
 `crunchyroll-watch-next-ranker` with AI Gateway inference tables enabled, writing
 requests and responses to `cr_ranker_inference_payload`. No serving code touches a
 feature table — the registered model already knows what it needs and where it lives.
@@ -617,7 +617,7 @@ The notebook takes `model_version` as a widget and is idempotent, retrying on
 ![Endpoint ready](images/09-endpoint-ready.png)
 *`images/09-endpoint-ready.png` — the ranker endpoint READY, with inference tables on.*
 
-`notebooks/04_query_ranker.py` plays the application, building its request through
+`notebooks/10_horizontal/04_query_ranker.py` plays the application, building its request through
 `src/crfs/candidates.py` — `candidates()` picks the 25 titles, `request_records()`
 builds the payload, `query_ranker()` sends it and `rank()` sorts the response. The app
 and the agent use those same four functions, so there is exactly one definition of what
@@ -648,7 +648,7 @@ keyed read, and — for contrast only — the SQL-console read.
 
 ## Step 6 · Features the store cannot hold
 
-Some features cannot be precomputed. `notebooks/06_ondemand_features.py` creates four
+Some features cannot be precomputed. `notebooks/10_horizontal/06_ondemand_features.py` creates four
 UC **Python** UDFs from the DDL generated by `src/crfs/udfs.py` (`udfs.ddl(fq)` emits
 them, `udfs.feature_functions(fq)` returns the matching `FeatureFunction` list), and they
 are evaluated inside the endpoint after the online lookups:
@@ -712,7 +712,7 @@ model serving* — the caller sees a 500 with no useful detail.
 
 ## Step 7 · Features without a model
 
-`notebooks/07_feature_serving.py` creates a feature spec
+`notebooks/10_horizontal/07_feature_serving.py` creates a feature spec
 (`fe.create_feature_spec(name=..., features=lookups + on_demand)`) and a **Feature
 Serving endpoint** named `crunchyroll-viewer-features`: keys in, feature values out, no
 model in the path. For when the scoring model lives outside Databricks, or the
@@ -751,7 +751,7 @@ caller sees a 500.
 
 ## Step 8 · Two models, one feature layer
 
-`notebooks/08_retrieval_ranker.py` adds retrieval: `TruncatedSVD(n_components=8)` on the
+`notebooks/10_horizontal/08_retrieval_ranker.py` adds retrieval: `TruncatedSVD(n_components=8)` on the
 300 × 132 implicit play matrix, restricted to the same training window as the ranker so
 there is no leakage.
 
@@ -785,7 +785,7 @@ is worth it when the caller can make two calls.
 
 Two notebooks, two publish modes, one contract.
 
-`notebooks/05_freshness_triggered.py` — **TRIGGERED**: reset a viewer to a calm
+`notebooks/10_horizontal/05_freshness_triggered.py` — **TRIGGERED**: reset a viewer to a calm
 baseline, rank 25 candidates, complete three sci-fi episodes *now* (written to
 `engagement_events_stream`, never to the training corpus), recompute
 `recent_behavior_current` through the shared `features.build_recent_behavior()`, call
@@ -818,7 +818,7 @@ three episodes.*
 *`images/12-freshness-before-after.png` — the candidates whose score moved, with the
 deltas.*
 
-`notebooks/10_streaming_continuous.py` — **CONTINUOUS**: a streaming aggregate maintains
+`notebooks/40_streaming/10_streaming_continuous.py` — **CONTINUOUS**: a streaming aggregate maintains
 `session_features_current` and the sync pipeline keeps `online_session_features` current
 with no refresh call at all. `publish_table(..., publish_mode="CONTINUOUS")` is called
 **once**; after that the pipeline owns the freshness.
@@ -841,7 +841,7 @@ write your own:
   (`cannot configure default credentials`), so the MERGE is done with the `DeltaTable`
   builder against the already-resolved table rather than through a fresh SDK call.
 
-Events arrive via `notebooks/11_event_producer.py`, which has three modes selected by a
+Events arrive via `notebooks/40_streaming/11_event_producer.py`, which has three modes selected by a
 widget: `burst` (n events and exit — what the app's button and `make burst` fire), `loop`
 (background traffic while you talk, the default for `crfs_streaming`) and `zerobus`
 (the same payload over gRPC direct-to-Delta, which needs
@@ -876,7 +876,7 @@ sink is answered concretely in [docs/streaming_paths.md](docs/streaming_paths.md
 
 ## Step 12 · An agent on the feature store
 
-`notebooks/12_agent_explain.py` logs an `mlflow.pyfunc.ResponsesAgent` (falling back to
+`notebooks/50_agent/12_agent_explain.py` logs an `mlflow.pyfunc.ResponsesAgent` (falling back to
 `ChatAgent` if the installed MLflow lacks it — the notebook prints which) backed by
 `databricks-claude-sonnet-4-5`, with three tools:
 
@@ -945,7 +945,7 @@ declaration that *would* go in the bundle once the CLI allows it.
 
 ## Step 13 · Operating it
 
-`notebooks/13_ops_and_cost.py` prints one operator table per online table —
+`notebooks/90_ops/13_ops_and_cost.py` prints one operator table per online table —
 `detailed_state`, source commit versus processed commit, lag seconds, pipeline state,
 online versus offline row counts — then store capacity, endpoint CU bounds, and 14 days
 of DBU and dollars per SKU. Everything it prints comes from `src/crfs/ops.py`:
@@ -1193,7 +1193,7 @@ path for rail features — are enumerated with their consequences in
 - **No Vector Search.** The retriever's item factors live in the model artifact; the
   README says where that stops scaling.
 - **Synthetic data only.** No real Crunchyroll data anywhere.
-- **No agent run yet.** `notebooks/12_agent_explain.py` is written against the working
+- **No agent run yet.** `notebooks/50_agent/12_agent_explain.py` is written against the working
   Feature Serving endpoint but has not been executed. `make agent` is the whole command;
   it is the smallest remaining gap in the story.
 - **Twelve screenshots are missing, and the twelve that exist predate the corrections.**

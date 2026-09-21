@@ -112,7 +112,7 @@
       "name": "bench_ramp",
       "displayName": "Measured latency vs concurrency",
       "queryLines": [
-        "-- One row per benchmark phase, written by notebooks/25_serving_benchmark.py.\n",
+        "-- One row per benchmark phase, written by notebooks/90_ops/25_serving_benchmark.py.\n",
         "-- `where` distinguishes an in-region job from a laptop; mixing them on one axis\n",
         "-- would be comparing the platform against somebody's wifi.\n",
         "SELECT concurrency,\n",
@@ -1026,7 +1026,7 @@
         {
           "widget": {
             "name": "t_bench_head",
-            "textbox_spec": "## Rail ranking \u2014 measured serving characteristics\n\nWritten by `notebooks/25_serving_benchmark.py` (`make bench`). Every latency here is reported with the concurrency it was measured at and the endpoint configuration it belongs to. `where = in_region_job` is the platform; `where = laptop` includes the round trip from outside the region.",
+            "textbox_spec": "## Rail ranking \u2014 measured serving characteristics\n\nWritten by `notebooks/90_ops/25_serving_benchmark.py` (`make bench`). Every latency here is reported with the concurrency it was measured at and the endpoint configuration it belongs to. `where = in_region_job` is the platform; `where = laptop` includes the round trip from outside the region.",
             "queries": [],
             "spec": {
               "version": 2,

@@ -1,7 +1,15 @@
 # Databricks notebook source
 # PIT probe: for 5 real impressions, compare viewer features at impression time (viewer_features_ts) vs today (viewer_features_current)
 import os, sys
-_root = os.path.abspath(os.path.join(os.getcwd(), ".."))
+# Walk up to the repo root instead of assuming a depth. These notebooks sit in
+# track folders (00_shared, 10_horizontal, ...), and the previous
+# `os.getcwd()/".."` resolved to notebooks/ the moment one moved -- which fails as
+# ModuleNotFoundError: src, from a line that looks like boilerplate.
+_root = os.getcwd()
+while _root != "/" and not os.path.isdir(os.path.join(_root, "src", "crfs")):
+    _root = os.path.dirname(_root)
+assert os.path.isdir(os.path.join(_root, "src", "crfs")), \
+    f"src/crfs not found above {os.getcwd()} -- is the bundle's whole file tree synced?"
 if _root not in sys.path:
     sys.path.insert(0, _root)
 from src.crfs.config import Config

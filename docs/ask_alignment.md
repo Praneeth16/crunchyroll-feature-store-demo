@@ -15,12 +15,12 @@ Status vocabulary is deliberately narrow: **met** = built and verified in a live
 
 | Stage | Status | Where |
 |---|---|---|
-| Feature Engineering | met | `notebooks/21_rail_features.py`, `src/crfs/rails.py` |
+| Feature Engineering | met | `notebooks/20_vertical/21_rail_features.py`, `src/crfs/rails.py` |
 | Feature Store | met | 7 UC feature tables, all published to Lakebase; `verify.sh` asserts row counts and dedup |
-| Model Training | met | `notebooks/22_train_rail_ranker.py`, trained from `fe.create_training_set` |
+| Model Training | met | `notebooks/20_vertical/22_train_rail_ranker.py`, trained from `fe.create_training_set` |
 | Model Registration | met | UC model `crunchyroll_rail_ranker` v10, `@champion`, tagged and described |
 | Model Serving | met | `crunchyroll-rail-ranker`, READY, serving v10, `scale_to_zero=false`, concurrency 4–32 |
-| Ranked Rails | met | `notebooks/24_homepage_assembly.py` — 14–16 eligible rails per viewer (mean 15.4), ranked in one call |
+| Ranked Rails | met | `notebooks/20_vertical/24_homepage_assembly.py` — 14–16 eligible rails per viewer (mean 15.4), ranked in one call |
 
 All five stages run from one command (`make up`), on a workspace whose ids are
 discovered rather than hardcoded.
@@ -137,7 +137,7 @@ the original document, so it is recorded here as an addition rather than an ask 
 
 | Element | Status | Evidence |
 |---|---|---|
-| Batch scoring from the same feature store | met | `notebooks/26_batch_scoring.py`, `fe.score_batch` against the **offline** store — no online store involved |
+| Batch scoring from the same feature store | met | `notebooks/20_vertical/26_batch_scoring.py`, `fe.score_batch` against the **offline** store — no online store involved |
 | Same model serves both paths | met | v10 `@champion` scored both ways; **16 of 16 collections at identical rank**, Spearman 1.0 |
 | Minutes-level refresh cadence | met, at demo scale | CDF-driven incremental mode; `make batch-incremental`. Unsized at their MAU |
 | What batch gives up | measured | **up to 12 of 16 collections** move across four contexts (5-12 across runs) — personalization a precomputed table cannot deliver |
