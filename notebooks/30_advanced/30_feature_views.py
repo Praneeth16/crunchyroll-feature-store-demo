@@ -89,9 +89,16 @@ fe = FeatureEngineeringClient()
 # MAGIC   between the label DataFrame and the definitions, so the label frame below
 # MAGIC   carries `viewer_id` and `event_ts` rather than the GA path's `ts`.
 # COMMAND ----------
-features = FV.viewer_features(cfg.catalog, cfg.schema)
+# Two grains. A viewer-only feature set cannot rank titles for a viewer -- every
+# candidate row of one impression shares the viewer, so there is nothing to discriminate
+# on, and the first run of this notebook scored a holdout AUC of 0.4992: exactly random.
+# The title-side features are what make the label learnable, and one create_training_set
+# call resolves both because the label frame carries both keys.
+features = FV.all_features(cfg.catalog, cfg.schema)
 for f in features:
     print(f"{f.name:28s} {FV.describe(f)}")
+print(f"\n{len(FV.viewer_features(cfg.catalog, cfg.schema))} viewer-grain + "
+      f"{len(FV.title_features(cfg.catalog, cfg.schema))} title-grain")
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## 2 · Compute them, before registering anything
@@ -438,25 +445,95 @@ for m in (materialized or []):
 # MAGIC once the data has landed. This waits on the tables rather than sleeping, the same
 # MAGIC way `src/crfs/ops.py` waits on a publish.
 # COMMAND ----------
-deadline = time.time() + 900
-seen = {}
-while time.time() < deadline:
-    tables = [r["tableName"] for r in
-              spark.sql(f"SHOW TABLES IN {cfg.fq} LIKE '{PREFIX}*'").collect()]
-    seen = {}
-    for t in tables:
+# What materialization actually creates, read back from the platform rather than guessed
+# from the prefix. Three things the first run taught, all worth seeing printed:
+#
+#   * `table_name_prefix` really is a PREFIX -- the platform appends a generated suffix,
+#     so the offline table is `fv_viewer_<id>`, not `fv_viewer`.
+#   * one table per (entity, window) grouping, not one table per call: the 24h, 7d and
+#     30d features land in different tables, and mixing grains adds more.
+#   * an internal `<name>_partial_aggregates` table appears beside each one.
+#
+# A wait loop that stops at "some table with rows exists" therefore reports success on a
+# partial materialization, which is what the first run did.
+materialized_report = {}
+try:
+    listed = fe.list_materialized_features()
+    rows = list(listed) if listed is not None else []
+    print(f"list_materialized_features: {len(rows)} entries")
+    for m in rows[:40]:
+        print("  ", m)
+    materialized_report["listed"] = [str(m) for m in rows]
+except Exception as e:
+    print("list_materialized_features unavailable:", type(e).__name__, str(e)[:160])
+    materialized_report["listed"] = f"{type(e).__name__}: {e}"
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ### Wait for the offline tables, then for the online copy
+# MAGIC
+# MAGIC Materialization is asynchronous: the call returns when the pipeline exists, not
+# MAGIC when data has landed. Both destinations are waited on separately, and the online
+# MAGIC one is reported as a gap rather than hidden if it does not arrive -- an online
+# MAGIC feature that is not there is the difference between this being a serving path and
+# MAGIC a training convenience.
+# COMMAND ----------
+def fv_tables(pattern: str):
+    """Offline tables the materialization created, with their row counts."""
+    out = {}
+    for r in spark.sql(f"SHOW TABLES IN {cfg.fq} LIKE '{pattern}'").collect():
+        name = r["tableName"]
+        if name.endswith("_partial_aggregates"):
+            continue          # internal intermediate, not a feature table
         try:
-            seen[t] = spark.table(cfg.t(t)).count()
+            out[name] = spark.table(cfg.t(name)).count()
         except Exception as e:
-            seen[t] = f"not readable yet ({type(e).__name__})"
-    if seen and all(isinstance(v, int) and v > 0 for v in seen.values()):
-        break
-    print(f"waiting for materialization: {seen}")
-    time.sleep(30)
+            out[name] = f"unreadable ({type(e).__name__})"
+    return out
 
-print("\nmaterialized tables:")
-for t, n in sorted(seen.items()):
-    print(f"  {cfg.t(t):70s} {n}")
+
+def online_tables(pattern: str):
+    """The online copies show up in UC as FOREIGN tables, the same as publish_table's."""
+    rows = spark.sql(f"""
+        SELECT table_name FROM {cfg.catalog}.information_schema.tables
+        WHERE table_schema = '{cfg.schema}' AND table_type = 'FOREIGN'
+          AND table_name LIKE '{pattern}'
+    """).collect()
+    return [r["table_name"] for r in rows]
+
+
+deadline = time.time() + 1200
+offline, online = {}, []
+while time.time() < deadline:
+    offline = fv_tables(f"{PREFIX}*")
+    online = online_tables(f"{PREFIX}_online%")
+    ready = offline and all(isinstance(v, int) and v > 0 for v in offline.values())
+    if ready and online:
+        break
+    print(f"waiting: offline={offline or '{}'} online={online or '[]'}")
+    time.sleep(45)
+
+print("\noffline feature tables:")
+for name, n in sorted(offline.items()):
+    print(f"  {cfg.t(name):72s} {n}")
+    try:
+        cols = [c for c in spark.table(cfg.t(name)).columns
+                if c.startswith(("fv_", "fvt_"))]
+        print(f"      features: {', '.join(cols)}")
+    except Exception:
+        pass
+
+print("\nonline copies in the Lakebase store:")
+if online:
+    for name in sorted(online):
+        print(f"  {cfg.t(name)}")
+else:
+    print("  NONE YET. The offline side is materialized and the online pipeline was")
+    print("  requested; the online tables had not appeared within the wait. Check")
+    print("  fe.list_materialized_features() and the pipeline it names before claiming")
+    print("  a serving path.")
+
+materialized_report["offline"] = offline
+materialized_report["online"] = online
 # COMMAND ----------
 dbutils.notebook.exit(json.dumps({
     "model": MODEL,
@@ -465,5 +542,6 @@ dbutils.notebook.exit(json.dumps({
     "n_features": len(FEATURE_COLS),
     "n_labels": n_labels,
     "materialized": True,
-    "tables": {k: v for k, v in seen.items()},
+    "materialization": materialized_report,
+    "online_ready": bool(materialized_report.get("online")),
 }, default=str))

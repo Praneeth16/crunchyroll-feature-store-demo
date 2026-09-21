@@ -72,7 +72,6 @@ def load_frame(path: str):
     being demonstrated is GPU minibatch training, not out-of-core IO. `iter_batches`
     below is what a real volume would use, and it takes the same path.
     """
-    import pandas as pd
     import pyarrow.dataset as ds
 
     return ds.dataset(_local(path), format="parquet").to_table().to_pandas()
@@ -108,7 +107,20 @@ def build_encoder(pdf, feature_cols, categorical):
                 for c in categorical}
     stats = {}
     for c in feature_cols:
-        col = pdf[c].astype("float64") if c in pdf else None
+        if c in pdf:
+            try:
+                col = pdf[c].astype("float64")
+            except (ValueError, TypeError) as e:
+                # Naming the column here turns a 40-frame pandas traceback ending in
+                # `could not convert string to float: 'sci_fi'` into something that says
+                # which column and what to do about it. A string column in the numeric
+                # list means the caller's taxonomy is wrong, not the data.
+                raise ValueError(
+                    f"feature column {c!r} is not numeric (sample: "
+                    f"{pdf[c].dropna().head(3).tolist()!r}). It belongs in `categorical`, "
+                    f"not in `feature_cols` -- see rails.model_columns().") from e
+        else:
+            col = None
         mu = float(col.mean()) if col is not None and col.notna().any() else 0.0
         sd = float(col.std()) if col is not None and col.notna().any() else 1.0
         # A constant column has sd 0, and dividing by it produces inf, which becomes a

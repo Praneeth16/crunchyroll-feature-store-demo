@@ -18,11 +18,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.crfs import rails as R  # noqa: E402
 from src.crfs import train_gpu as TG  # noqa: E402
-
-NON_FEATURES = {"engaged", "sample_weight", "ts", "event_ts", "viewer_id", "rail_id",
-                "request_epoch_s", "device", "locale", "rail_position", "was_viewport"}
-CATEGORICAL = ["device", "locale"]
 
 
 def main(argv=None):
@@ -40,18 +37,25 @@ def main(argv=None):
                    help="where to write the metrics summary; defaults to stdout only")
     args = ap.parse_args(argv)
 
+    # Same taxonomy as notebook 22 and notebook 32, from one definition. Deriving it
+    # here by exclusion is what fed a string column to a float cast and the raw epochs
+    # to the model.
+    feature_cols, categorical, not_features = R.model_columns()
     head = TG.load_frame(args.parquet).head(200)
-    feature_cols = [c for c in head.columns if c not in NON_FEATURES]
-    if not feature_cols:
+    missing, unused = R.check_model_columns(list(head.columns), feature_cols,
+                                            categorical, not_features)
+    if missing:
         raise SystemExit(
-            f"no feature columns in {args.parquet}. Its columns are {list(head.columns)} "
-            "-- has notebook 32 exported the training set to this path?")
-    print(f"{len(feature_cols)} feature columns, {len(CATEGORICAL)} categorical")
+            f"{args.parquet} is missing expected columns: {missing}. Its columns are "
+            f"{list(head.columns)} -- has notebook 32 exported the training set there?")
+    if unused:
+        print("WARNING - columns present but unused:", unused)
+    print(f"{len(feature_cols)} numeric + {len(categorical)} categorical features")
 
     result = TG.train(
         parquet_path=args.parquet,
         feature_cols=feature_cols,
-        categorical=CATEGORICAL,
+        categorical=categorical,
         label=args.label,
         weight_col=args.weight_col,
         epochs=args.epochs,

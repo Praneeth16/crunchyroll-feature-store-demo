@@ -754,3 +754,54 @@ def eligible_rails_all(spark, fq: str, viewers=None, as_of=None):
     return spark.sql(ELIGIBLE_RAILS_ALL_SQL.format(
         fq=fq, clock_expr=clock_expr, inprogress_days=INPROGRESS_DAYS,
         viewer_filter=viewer_filter))
+
+
+# ------------------------------------------------------- the model's column taxonomy
+def model_columns():
+    """Which columns of a rail training set are numeric features, which are
+    categorical, and which are deliberately neither.
+
+    Defined once here because two notebooks now fit models on this training set --
+    notebook 22 (scikit-learn) and notebook 32 (torch on GPU) -- and a second copy of
+    this list is exactly the drift this repo argues against. The GPU notebook first
+    derived it by exclusion instead and produced two bugs at once: it fed the raw
+    epochs to the model, and it crashed on `could not convert string to float:
+    'sci_fi'` because `last_primary_genre` is a string.
+
+    Two rules are encoded here and both matter more than they look:
+
+      * **rendered position is never a feature.** `rail_position` and `was_viewport`
+        are label-side: at request time the position is the output, not an input.
+      * **raw epochs are never features.** `last_event_epoch_s` and
+        `vr_last_click_epoch_s` exist to feed the decay UDFs, which turn them into
+        something with meaning. Fed to a model directly they are a proxy for calendar
+        date, and they poison anything trained in one window and served in another.
+
+    Returns (numeric, categorical, not_features).
+    """
+    from . import features as F
+    from . import udfs as U
+
+    viewer_num = list(F.VIEWER_FEATURE_COLS) + [
+        c for c in F.RECENT_FEATURE_COLS
+        if c != "last_primary_genre" and not c.endswith("_epoch_s")]
+    rail_num = list(RAIL_FEATURE_COLS)
+    vr_num = [c for c in VIEWER_RAIL_FEATURE_COLS if not c.endswith("_epoch_s")]
+    context_num = ["hour_of_day", "day_of_week"]
+    ondemand = list(U.RAIL_ONDEMAND_OUTPUTS)
+
+    numeric = viewer_num + rail_num + vr_num + context_num + ondemand
+    categorical = ["device", "locale", "last_primary_genre"]
+    not_features = ["viewer_id", "rail_id", "engaged", "request_epoch_s",
+                    "last_event_epoch_s", "vr_last_click_epoch_s",
+                    "rail_position", "was_viewport", "sample_weight", "ts"]
+    return numeric, categorical, not_features
+
+
+def check_model_columns(columns, numeric, categorical, not_features):
+    """Assert the training frame has what the model expects, and report anything it
+    carries that nobody claimed -- a new feature column silently going unused is the
+    failure mode this catches."""
+    missing = [c for c in numeric + categorical if c not in columns]
+    unused = sorted(set(columns) - set(numeric) - set(categorical) - set(not_features))
+    return missing, unused

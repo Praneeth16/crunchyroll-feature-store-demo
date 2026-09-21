@@ -195,16 +195,23 @@ print(f"{len(files)} files, {sum(f.size for f in files) / 1e6:0.1f} MB")
 # MAGIC The data is loaded **inside** the function on purpose: closing over a DataFrame
 # MAGIC from the enclosing scope is the documented way to get a serialization error.
 # COMMAND ----------
-FEATURE_COLS = None   # resolved from the exported frame, below
-CATEGORICAL = ["device", "locale"]
+# The column taxonomy comes from `R.model_columns()`, which notebook 22 also uses --
+# not from an exclusion list here. Deriving it by exclusion produced two bugs in one
+# run: `last_primary_genre` is a string, so training died with `could not convert
+# string to float: 'sci_fi'`, and the raw epochs would have been fed to the model as
+# numbers, where they are a proxy for calendar date and poison anything trained in one
+# window and served in another.
+FEATURE_COLS, CATEGORICAL, NOT_FEATURES = R.model_columns()
 
 head = TG.load_frame(parquet_path).head(200)
-NON_FEATURES = {"engaged", "sample_weight", "ts", "event_ts", "viewer_id",
-                "rail_id", "request_epoch_s", "device", "locale",
-                "rail_position", "was_viewport"}
-FEATURE_COLS = [c for c in head.columns if c not in NON_FEATURES]
-print(f"{len(FEATURE_COLS)} feature columns, {len(CATEGORICAL)} categorical")
-print("first 12:", FEATURE_COLS[:12])
+missing, unused = R.check_model_columns(list(head.columns), FEATURE_COLS, CATEGORICAL,
+                                        NOT_FEATURES)
+assert not missing, f"the exported training set is missing expected columns: {missing}"
+if unused:
+    print("WARNING - columns present but unused, check this is intended:", unused)
+print(f"{len(FEATURE_COLS)} numeric + {len(CATEGORICAL)} categorical features")
+print("deliberately not features:", NOT_FEATURES)
+print("first 12 numeric:", FEATURE_COLS[:12])
 # COMMAND ----------
 USE_DIST = cfg.extras["gpu_use_distributed"].strip().lower() == "true"
 result = None

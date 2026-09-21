@@ -147,7 +147,7 @@ for k, val in tags.items():
         continue
     mc.set_model_version_tag(MODEL, SERVED_VERSION, k, val)
     print(f"  {k}: set to {val} (first time -- this version predates the convention,")
-    print(f"     so it is a baseline from now rather than from training)")
+    print("     so it is a baseline from now rather than from training)")
 
 baseline_fp = dict(mc.get_model_version(MODEL, SERVED_VERSION).tags or {}).get(V.TAG_FINGERPRINT)
 results["fingerprint_baseline"] = baseline_fp
@@ -156,8 +156,8 @@ results["fingerprint_baseline"] = baseline_fp
 # MAGIC ## 3 · Drift report
 # MAGIC
 # MAGIC Every table and function the served version pins, checked for existence and for
-# MAGIC change. This is what `scripts/verify.sh` calls, so a broken dependency fails a
-# MAGIC check rather than a request.
+# MAGIC change. `scripts/verify.sh` covers the existence half by name and stays read-only;
+# MAGIC the fingerprint comparison needs the model artifact, so it lives here.
 # COMMAND ----------
 report = V.drift_report(spark, model_uri, recorded_fingerprint=baseline_fp)
 print(V.render_drift(report))

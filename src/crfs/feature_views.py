@@ -44,6 +44,23 @@ SPECS = [
 ]
 
 
+# Title-grain features over the same source. A viewer-only feature set cannot answer
+# "which of these titles did this viewer play" -- every candidate row of one impression
+# shares the viewer, so the model has nothing to discriminate on and the first run of
+# notebook 30 scored a holdout AUC of 0.4992, i.e. exactly random. Popularity and reach
+# are the title-side signal, and both are point-in-time by virtue of the window.
+#
+# Nothing here uses `played`: it is the label, and the docs require a label not to be a
+# column of a feature source.
+TITLE_SPECS = [
+    ("fvt_events_7d",         "Count",               "event_id",      timedelta(days=7),  timedelta(days=1)),
+    ("fvt_watch_seconds_7d",  "Sum",                 "watch_seconds", timedelta(days=7),  timedelta(days=1)),
+    ("fvt_viewers_7d",        "ApproxCountDistinct", "viewer_id",     timedelta(days=7),  timedelta(days=1)),
+    ("fvt_events_30d",        "Count",               "event_id",      timedelta(days=30), timedelta(days=1)),
+    ("fvt_watch_seconds_30d", "Sum",                 "watch_seconds", timedelta(days=30), timedelta(days=1)),
+]
+
+
 def viewer_features(catalog: str, schema: str) -> list:
     """The viewer-grain features, keyed by `viewer_id` on `event_ts`.
 
@@ -149,3 +166,38 @@ def _get_feature(fe, full: str, catalog: str, schema: str, name: str):
         except Exception:
             return None       # the call shape was right; the feature is not readable
     return None
+
+
+def title_features(catalog: str, schema: str) -> list:
+    """Title-grain features, keyed by `title_id` on `event_ts`.
+
+    Same source and same windows as the viewer features -- the entity is what differs.
+    One `create_training_set` call can mix both, because the label frame carries both
+    keys, and that is the shape any ranking model needs: viewer signal x item signal.
+    """
+    from databricks.feature_engineering import entities as E
+
+    source = E.DeltaTableSource(
+        catalog_name=catalog,
+        schema_name=schema,
+        table_name=SOURCE_TABLE,
+    )
+    out = []
+    for name, op, col, duration, slide in TITLE_SPECS:
+        out.append(E.Feature(
+            name=name,
+            source=source,
+            entity=["title_id"],
+            timeseries_column="event_ts",
+            function=E.AggregationFunction(
+                getattr(E, op)(input=col),
+                E.SlidingWindow(window_duration=duration, slide_duration=slide),
+            ),
+            description=f"{op}({col}) per title over {_human(duration)}, sliding every {_human(slide)}",
+        ))
+    return out
+
+
+def all_features(catalog: str, schema: str) -> list:
+    """Both grains, which is what notebook 30 trains on."""
+    return viewer_features(catalog, schema) + title_features(catalog, schema)
