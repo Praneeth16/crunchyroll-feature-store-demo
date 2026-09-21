@@ -2,7 +2,7 @@
 # Grant the app's service principal the Unity Catalog access it needs to read the
 # Delta tables behind its panels.
 #
-# Why this exists: deploy_app.sh granted Postgres (grant_app_postgres.sh) and endpoint
+# Why this exists: app deployment granted Postgres (grant_app_postgres.sh) and endpoint
 # CAN_QUERY (grant_app_endpoints.sh), and nothing granted Unity Catalog. The app's
 # Delta-backed panels therefore came back empty, and because app.py's _sql() treated a
 # failed statement as zero rows, the page rendered "No rail catalog yet - run

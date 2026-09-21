@@ -38,10 +38,10 @@ hours" online features were a week older than the wall clock the freshness beat 
 `scripts/verify.sh` now fails if `max(event_ts)` falls more than two days behind
 `current_date`.
 
-![Catalog Explorer](images/01-catalog-explorer.png)
+![Catalog Explorer](../images/01-catalog-explorer.png)
 *`images/01-catalog-explorer.png` — the schema in Catalog Explorer.*
 
-![engagement_events](images/02-events-table.png)
+![engagement_events](../images/02-events-table.png)
 *`images/02-events-table.png` — `engagement_events` sample rows.*
 
 > "Nothing here is feature-store specific yet. Viewing events, catalog metadata,
@@ -92,14 +92,14 @@ What notebook 01 then does, in order:
   no `time.sleep()` left anywhere in the pipeline; the first version had about four
   minutes of it.
 
-![Feature table detail](images/03-feature-table-viewer.png)
+![Feature table detail](../images/03-feature-table-viewer.png)
 *`images/03-feature-table-viewer.png` — `viewer_features_current` in Catalog Explorer,
 showing the primary key and the feature-table badge.*
 
-![Online tables](images/04-online-tables.png)
+![Online tables](../images/04-online-tables.png)
 *`images/04-online-tables.png` — the published online tables and their sync state.*
 
-![Lakebase project](images/13-lakebase-project.png)
+![Lakebase project](../images/13-lakebase-project.png)
 *`images/13-lakebase-project.png` — the Lakebase project `crunchyroll-online-store`
 that `fe.create_online_store` provisioned.*
 
@@ -145,7 +145,7 @@ against `viewer_features_ts` with `timestamp_lookup_key="ts"`, printing feature 
 `notebooks/10_horizontal/02b_pit_probe.py` is the same proof standalone, so it can be shown without
 the training run around it.
 
-![PIT proof](images/06-pit-proof.png)
+![PIT proof](../images/06-pit-proof.png)
 *`images/06-pit-proof.png` — the same feature, as of impression time and as of now.*
 
 > "Those two columns differ because the viewer kept watching after that impression.
@@ -159,7 +159,7 @@ Unity Catalog **with the feature spec inside it**. That is the mechanism the who
 rests on: at serving time nothing in the request has to name a feature table, because
 the model already carries the lookup graph.
 
-![Model version](images/08b-model-version-spec.png)
+![Model version](../images/08b-model-version-spec.png)
 *`images/08b-model-version-spec.png` — the registered model version with its embedded
 feature spec.*
 
@@ -173,7 +173,7 @@ The notebook takes `model_version` as a widget and is idempotent, retrying on
 `ResourceConflict`, which is what lets the spine call it twice (`deploy_ranker` for v1,
 `deploy_ranker_v2` after the on-demand features land).
 
-![Endpoint ready](images/09-endpoint-ready.png)
+![Endpoint ready](../images/09-endpoint-ready.png)
 *`images/09-endpoint-ready.png` — the ranker endpoint READY, with inference tables on.*
 
 `notebooks/10_horizontal/04_query_ranker.py` plays the application, building its request through
@@ -192,10 +192,10 @@ names, no table names — the
 endpoint fetches 38 numeric and 4 categorical features from Lakebase itself and computes
 four more at request time.
 
-![Ranked output](images/10-query-ranked.png)
+![Ranked output](../images/10-query-ranked.png)
 *`images/10-query-ranked.png` — 25 candidates in, ranked titles out.*
 
-![Inference table](images/11-inference-table.png)
+![Inference table](../images/11-inference-table.png)
 *`images/11-inference-table.png` — `cr_ranker_inference_payload`, the AI Gateway
 inference table, which is also the retraining corpus and the dashboard's source.*
 
@@ -369,11 +369,11 @@ with a delta of exactly 0.0, because the sync wait could be satisfied by the *pr
 completed sync and the endpoint then re-ranked against stale features. A demo that
 silently compares identical inputs is worse than one that breaks.
 
-![Online row before/after](images/14-freshness-features.png)
+![Online row before/after](../images/14-freshness-features.png)
 *`images/14-freshness-features.png` — the online row for `v0001` before and after the
 three episodes.*
 
-![Before/after movers](images/12-freshness-before-after.png)
+![Before/after movers](../images/12-freshness-before-after.png)
 *`images/12-freshness-before-after.png` — the candidates whose score moved, with the
 deltas.*
 
@@ -431,7 +431,7 @@ refresh call, no orchestration — and the keyed-read latency once the value is 
 Zerobus writes to **Delta only** — it cannot write to Lakebase Postgres, and the
 published online tables are read-only there because the sync pipeline owns them. Why
 this demo does not use Stream Feature Views, Real-Time Mode, or the native Postgres
-sink is answered concretely in [docs/streaming_paths.md](docs/streaming_paths.md).
+sink is answered concretely in [docs/streaming_paths.md](streaming_paths.md).
 
 ## Step 12 · An agent on the feature store
 
@@ -464,7 +464,11 @@ Resources are declared at log time (`DatabricksServingEndpoint` ×2, `Databricks
 A Streamlit app on Databricks Apps — `app/app.py` (the six regions),
 `app/lib/lakebase.py` (the Postgres access layer, the same `OnlineStore` class as
 `src/crfs/online.py` but vendored so the app has no dependency on the repo's driver
-code), `app/app.yaml` (env vars) and `app/requirements.txt`.
+code) and `app/requirements.txt`. Its command and environment come from
+[`resources/app.yml`](../resources/app.yml) rather than from an `app.yaml` in the source
+tree: Databricks Apps does not expand `${NAME}` inside `app.yaml`, so a template there
+had to be rendered before upload, and one deploy shipped without
+`RAIL_RANKER_ENDPOINT` because of it. The bundle resolves `${var.*}` itself.
 
 | Region in `app/app.py` | What it shows |
 |---|---|
@@ -491,12 +495,17 @@ Two grant scripts, and both matter:
 - `scripts/grant_app_endpoints.sh <profile>` — `CAN_QUERY` on the serving endpoints and
   `CAN_USE` on the warehouse.
 
-The app is deployed by `scripts/deploy_app.sh`, **not** by the bundle: CLI v1.14.1 always
-sends `forward_user_access_token` in the update mask and the Apps API rejects it, so
-`bundle deploy` cannot update an app that already exists. The reasoning and the filed
-issue are in [docs/risks.md](docs/risks.md), and
-[docs/app.resource.yml.reference](docs/app.resource.yml.reference) keeps the resource
-declaration that *would* go in the bundle once the CLI allows it.
+A third grant script, `scripts/grant_app_uc.sh <profile>`, grants `USE_CATALOG`,
+`USE_SCHEMA` and `SELECT`. Without it every Delta-backed panel comes back empty and it
+looks like a missing pipeline rather than a missing grant — see
+[verification_log.md](verification_log.md) V47, which is the whole diagnosis.
+
+**The app is a bundle resource.** `make deploy` creates or updates it and
+`make deploy-app` (`bundle run crfs_watch_next`) pushes its source and runs the three
+grants. That was not true until CLI v1.17.0: v1.14.1 always sent
+`forward_user_access_token` in the update mask, the Apps API rejected it, and every
+deploy after the first failed — so the app lived in a script instead. The retest, and the
+three things it turned up, are in [risks.md](risks.md) §8b.
 
 > **Screenshots missing:** `images/19-app-funnel.png`, `images/20-app-lakebase-panel.png`
 > and `images/21-app-freshness.png`. The app deploys and its logs are clean, but nobody
@@ -569,7 +578,7 @@ both leave the table behind in Postgres. Getting that wrong produces the confusi
 where Unity Catalog shows nothing and the next `publish_table` still fails with
 `AlreadyExists`.
 
-Full details and the five levers in order: [docs/cost_and_sizing.md](docs/cost_and_sizing.md).
+Full details and the five levers in order: [docs/cost_and_sizing.md](cost_and_sizing.md).
 
 
 ---
@@ -589,7 +598,7 @@ So there is no `viewer_rail_current` mirror. Training and serving read the same 
 through the same `FeatureLookup`. That is a stronger statement than "two tables built
 from one definition" — the horizontal path still keeps `viewer_features_ts` +
 `viewer_features_current`, and collapsing it the same way is the recommendation
-written up in [docs/vertical_ranking.md](docs/vertical_ranking.md).
+written up in [docs/vertical_ranking.md](vertical_ranking.md).
 
 ### Position bias, which a homepage ranker cannot skip
 
@@ -618,7 +627,7 @@ session every viewer sees the same rail-level priors. Note the importance *order
 between the two new tables is not stable run to run and should not be quoted; the stable
 findings are that the two new tables dominate and the shared viewer tables sit at ~zero
 for rail ranking. Reconciled, with multiple runs' numbers, in
-[docs/vertical_ranking.md](docs/vertical_ranking.md), along with why the shared viewer
+[docs/vertical_ranking.md](vertical_ranking.md), along with why the shared viewer
 tables contribute ~nothing to *rail* ranking and what that does and does not say about
 sharing a feature store.
 
@@ -658,7 +667,7 @@ the README's `![...]` links will start resolving without any other edit.
 show the right screens and the right shape, but any number visible in them predates the
 latency fix and the data-clock fix, so read the numbers from this README's text — those
 come from the corrected runs and each has a row in
-[docs/verification_log.md](docs/verification_log.md). Re-capturing them is the cheapest
+[docs/verification_log.md](verification_log.md). Re-capturing them is the cheapest
 outstanding improvement to this repo.
 
 ### What is still missing

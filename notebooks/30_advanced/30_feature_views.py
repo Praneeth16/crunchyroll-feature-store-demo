@@ -280,7 +280,21 @@ class _LocalCtx:
 
 _probe = FeatureViewRanker()
 _probe.load_context(_LocalCtx())
-_serving_like = te.drop(columns=["engaged"], errors="ignore")
+
+# The input example has to come back through Spark, not out of the pandas frame the
+# model was fit on. `fe.log_model` infers the signature from the example, and a column
+# that pandas holds as float64 (because this sample contained a null) but Spark returns
+# as a nullable Int64 fails at scoring time with
+#   Incompatible input types for column fv_watch_seconds_24h.
+#   Can not safely convert Int64 to float64.
+# Round-tripping the example through `load_df().toPandas()` is the same conversion
+# `score_batch` performs, so the signature and the served frame agree by construction.
+_serving_like = (training_set.load_df()
+                 .drop("engaged")
+                 .limit(24)
+                 .toPandas())
+print("example dtypes, as Spark delivers them:")
+print(_serving_like.dtypes.to_string())
 for label, frame in [("one row", _serving_like.head(1)),
                      ("one viewer, many titles", _serving_like.head(12)),
                      ("features absent (endpoint lookup miss)",
