@@ -12,3 +12,8 @@ secrets.env
 .claude/
 .crfs.vars
 dashboards/generated/
+
+# The standalone deck inlines every image as base64 -- 1.1 MB of it, and the
+# base64 trips secret scanners. Regenerate it from docs/deck/index.html when a
+# single sendable file is needed.
+docs/deck/*_standalone.html
