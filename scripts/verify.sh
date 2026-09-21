@@ -63,15 +63,27 @@ done
 # non-functional endpoint. Each request-path endpoint now gets one real query.
 echo
 echo "endpoints answer a real request"
+# Two attempts, because a scale-to-zero endpoint's FIRST request after idle legitimately
+# takes 30-60s+ while a container starts, and the CLI gives up after 60s of inactivity.
+# One attempt made this check fail on a cold retriever while the endpoint was perfectly
+# healthy -- a correctness check that reports a cold start as a defect trains people to
+# ignore it. The first attempt doubles as the warm-up.
 query_endpoint() {
-  local ep="$1" payload="$2"
-  out=$("$DB" api post "/serving-endpoints/$ep/invocations" --profile "$PROFILE" \
-        --json "$payload" 2>&1)
-  if printf '%s' "$out" | grep -qE '"(predictions|outputs)"'; then
-    ok "$ep answered"
-  else
-    bad "$ep is READY but does not answer: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-180)"
-  fi
+  local ep="$1" payload="$2" attempt out
+  for attempt in 1 2; do
+    out=$("$DB" api post "/serving-endpoints/$ep/invocations" --profile "$PROFILE" \
+          --json "$payload" 2>&1)
+    if printf '%s' "$out" | grep -qE '"(predictions|outputs)"'; then
+      if [ "$attempt" = "1" ]; then
+        ok "$ep answered"
+      else
+        ok "$ep answered on the second attempt (first request warmed a scaled-to-zero container)"
+      fi
+      return
+    fi
+    [ "$attempt" = "1" ] && printf '        %s\n' "$ep did not answer within the client timeout; retrying once after the warm-up"
+  done
+  bad "$ep is READY but does not answer: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-180)"
 }
 query_endpoint crunchyroll-candidate-retriever \
   '{"dataframe_records":[{"viewer_id":"v0001","top_k":10}]}'
