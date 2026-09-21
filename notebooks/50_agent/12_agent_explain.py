@@ -142,9 +142,13 @@ def describe_title(title_id: str):
         w_tool = WorkspaceClient()
         warehouse_id = WAREHOUSE_ID  # substituted into tools.py at log time  # Placeholder, will be set at deploy time
 
+        # Single braces: this is a plain f-string, so `{{catalog}}` rendered as the
+        # literal text `{catalog}` and the warehouse received
+        # `FROM {catalog}.{schema}.titles`. The doubled form is only correct inside the
+        # tool_code template further down, which is .format()-ed.
         sql = f"""
         SELECT title_id, title_name, primary_genre, franchise, episode_count
-        FROM {{catalog}}.{{schema}}.titles
+        FROM {cfg.catalog}.{cfg.schema}.titles
         WHERE title_id = '{title_id}'
         """
 
@@ -278,7 +282,14 @@ def score_candidates(viewer_id: str, title_ids: list, surface: str, device: str,
 def describe_title(title_id: str):
     try:
         w = WorkspaceClient()
-        sql = f"SELECT title_id, title_name, primary_genre, franchise, episode_count FROM {{catalog}}.{{schema}}.titles WHERE title_id = '{{title_id}}'"
+        # {catalog}/{schema} are substituted by .format() when this template is written
+        # out; {{title_id}} stays doubled so the GENERATED file keeps it as an f-string
+        # placeholder bound to the function's own argument. Doubling all three -- which is
+        # what this line did -- produced a tools.py whose f-string referenced `catalog`
+        # and `schema`, names that do not exist in it, so every describe_title call would
+        # have raised NameError. ruff F522 found it: .format was passing two arguments the
+        # template never used.
+        sql = f"SELECT title_id, title_name, primary_genre, franchise, episode_count FROM {catalog}.{schema}.titles WHERE title_id = '{{title_id}}'"
         result = w.statement_execution.execute_statement(warehouse_id="{warehouse_id}", statement=sql, wait_timeout="30s")
         rows = (result.result.data_array if result.result else None) or []
         if rows:
