@@ -29,7 +29,7 @@ export function LatencyWaterfall({ hp, roundTrip, history }: { hp: Homepage; rou
     <Card
       title="Request waterfall"
       right={
-        <div className="flex items-center gap-4 text-xs text-ink-400">
+        <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 text-xs text-ink-400">
           <span>
             server <b className="num text-ink-100">{ms(hp.total_ms)}</b>
           </span>
@@ -46,7 +46,7 @@ export function LatencyWaterfall({ hp, roundTrip, history }: { hp: Homepage; rou
     >
       <div className="space-y-1.5">
         {hp.timings.map((t) => (
-          <div key={t.stage} className="grid grid-cols-[14rem_1fr_4.5rem] items-center gap-3 text-xs">
+          <div key={t.stage} className="grid grid-cols-[7.5rem_1fr_3.75rem] items-center gap-2 text-xs sm:grid-cols-[14rem_1fr_4.5rem] sm:gap-3">
             <span className="truncate text-ink-300">{LABEL[t.stage] ?? t.stage}</span>
             <div className="relative h-3 rounded bg-ink-850">
               <div

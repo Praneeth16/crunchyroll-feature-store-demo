@@ -22,7 +22,7 @@ export function SourceBadge({ source }: { source: Source }) {
 export function Card({ title, right, children, className = "" }: { title: ReactNode; right?: ReactNode; children: ReactNode; className?: string }) {
   return (
     <section className={`card ${className}`}>
-      <header className="mb-3 flex items-center justify-between gap-2">
+      <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="card-title">{title}</h2>
         {right}
       </header>

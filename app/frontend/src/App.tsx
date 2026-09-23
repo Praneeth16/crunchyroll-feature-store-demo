@@ -66,7 +66,7 @@ export default function App() {
   const set = (p: Partial<Ctx>) => setCtx((c) => ({ ...c, ...p }));
 
   return (
-    <div className="mx-auto max-w-[1400px] space-y-4 px-4 py-6 sm:px-6">
+    <div className="mx-auto max-w-[1400px] space-y-4 overflow-x-clip px-4 py-6 sm:px-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-brand-500">
@@ -79,8 +79,8 @@ export default function App() {
           </p>
         </div>
         {cfg && (
-          <div className="text-right text-xs text-ink-500">
-            <div className="font-mono">
+          <div className="min-w-0 text-xs text-ink-500 sm:text-right">
+            <div className="break-all font-mono">
               {cfg.catalog}.{cfg.schema}
             </div>
             <div>
@@ -106,11 +106,11 @@ export default function App() {
         <div className={`space-y-4 transition-opacity ${loading ? "opacity-70" : ""}`}>
           <LatencyWaterfall hp={hp} roundTrip={roundTrip} history={history} />
           <div className="grid gap-4 lg:grid-cols-3">
-            <div className="space-y-4 lg:col-span-2">
+            <div className="min-w-0 space-y-4 lg:col-span-2">
               <RailList hp={hp} />
               <TitleRow hp={hp} ctx={ctx} />
             </div>
-            <div className="space-y-4">
+            <div className="min-w-0 space-y-4">
               <FallbackPanel hp={hp} onChange={() => load(ctx)} />
               <OnlineRows hp={hp} />
               <RequestPanel hp={hp} />

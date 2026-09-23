@@ -20,8 +20,9 @@ ONLINE_STORE = env("ONLINE_STORE", "crunchyroll-online-store")
 BURST_JOB_ID = env("BURST_JOB_ID", "")
 BURST_WAIT_S = float(env("BURST_WAIT_S", "480"))
 
-# Request-path budgets. The rail ranker measured p95 67 ms in region, so 300 ms is ~4x
-# headroom before the homepage stops waiting and renders a fallback.
+# Request-path budgets. The rail ranker's p95 is 67 ms in the benchmark and 98-129 ms as
+# the app measures it (docs/homepage_service.md), so 300 ms is 2-3x headroom before the
+# homepage stops waiting and renders a fallback.
 RAIL_TIMEOUT_MS = int(env("RAIL_TIMEOUT_MS", "300"))
 RANKER_TIMEOUT_MS = int(env("RANKER_TIMEOUT_MS", "400"))
 RETRIEVER_TIMEOUT_MS = int(env("RETRIEVER_TIMEOUT_MS", "400"))

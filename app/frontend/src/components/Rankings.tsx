@@ -48,7 +48,7 @@ export function RailList({ hp }: { hp: Homepage }) {
       )}
       <ol className="space-y-1">
         {r.items.map((i) => (
-          <li key={i.rail_id} className="grid grid-cols-[1.75rem_1fr_7rem_2.5rem] items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-ink-850">
+          <li key={i.rail_id} className="grid grid-cols-[1.5rem_1fr_5rem_2.25rem] items-center gap-2 sm:grid-cols-[1.75rem_1fr_7rem_2.5rem] sm:gap-3 rounded-lg px-2 py-1.5 hover:bg-ink-850">
             <span className="num text-sm font-semibold text-ink-500">{i.rank}</span>
             <div className="min-w-0">
               <div className="truncate text-sm text-ink-100">{i.rail_name}</div>
@@ -93,7 +93,7 @@ export function TitleRow({ hp, ctx }: { hp: Homepage; ctx: Ctx }) {
         </div>
       }
     >
-      <div className="mb-4 flex items-center gap-1 text-xs">
+      <div className="mb-4 flex flex-wrap items-center gap-1 text-xs">
         {[
           ["catalog", f.catalog],
           [t.retrieval_source === "model" ? "retrieved" : "popular (retriever down)", f.retrieved],
