@@ -57,11 +57,23 @@ challenger's ~10% share. **Decision: ROLLBACK** on all three checks; routes read
 `[('rail_ranker-11', 100)]`.
 
 So the gate's first real decision was the one it exists for: a registered, aliased model
-that trains and logs cleanly but **does not serve**, caught at 10% instead of at 100%. The
-GPU model had never been behind an endpoint before — notebook 32 could not score it
-off-endpoint either (`verification_log.md` V88) — and this run did not keep the error
-text, only the count. `canary.summarise` now records the first error per entity, so the
-next run's `canary_decisions` row names the cause. Finding it is the open follow-up.
+that trains and logs cleanly but **does not serve**, caught at 10% instead of at 100%.
+
+**The cause**, read afterwards from the inference table (65 rows, all status 400, all the
+challenger — 40 direct + 24 routed + 1 warm-up):
+
+```
+mlflow.exceptions.MlflowException: Model is missing inputs ['ts'].
+```
+
+`ts` is the point-in-time lookup key. Notebook 32 built its `input_example` from the Parquet
+export, which re-attaches `ts` for the time split, and MLflow turned the example into the
+raw model's signature — so the model required a column the endpoint never sends. Notebook
+22 builds its example from the training frame, which never has `ts`, and asserts it. Notebook
+32 now drops `ts` and the label-side columns, asserts it, and self-tests the "request keys
+only" shape before logging. The model has to be retrained and re-registered for the fix to
+take effect; v5 stays broken. The run kept only error counts, so `canary.summarise` now
+also records the first error per entity.
 
 ## What it deliberately does not judge
 

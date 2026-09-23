@@ -944,5 +944,14 @@ Every table's sync status came back `User <app SP> does not have View permission
 (616 rail rows): champion 0/40 errors, p50 74 / p95 134 ms; challenger **40/40 errors**.
 Routed: 176/200 answered, the 24 failures matching the 10% share. ROLLBACK; final routes
 `[('rail_ranker-11', 100)]`, asserted. The error text was not recorded — only counts — so
-`canary.summarise` now keeps the first error per entity. Why the torch model fails in
-serving is open; it is the first time it has been behind an endpoint.
+`canary.summarise` now keeps the first error per entity.
+
+### V96 · Why the GPU model failed: the PIT timestamp leaked into its signature
+
+Read from `cr_rail_inference_payload` once it landed: 65 rows for the challenger entity, all
+status 400 — `MlflowException: Model is missing inputs ['ts']`. Notebook 32's `input_example`
+came from the Parquet export, which carries `ts` back for the time-based split, so the raw
+model's signature required it; the endpoint only ever sends the seven request fields. Notebook
+32 now drops `ts` and the label-side columns from the example, asserts none remain, and runs a
+"request keys only" self-test before `fe.log_model`. v5 is unchanged; a retrain registers a
+fixed version.

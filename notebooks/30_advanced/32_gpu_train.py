@@ -365,14 +365,27 @@ class _LocalCtx:
 # a live endpoint returns a 500 with no traceback and no line number.
 _probe = GpuRailRanker()
 _probe.load_context(_LocalCtx())
+# The export carries `ts` and the label-side columns back for training (see §3), but the
+# endpoint never sends them. The input example below becomes the raw model's signature,
+# so anything left in it is a REQUIRED serving input. v5 was registered with `ts` in it
+# and failed every request once served --
+#   MlflowException: Model is missing inputs ['ts'].
+# -- found by notebook 33's canary gate (docs/verification_log.md V96). Notebook 22 builds
+# its example from the training frame, which never had `ts`, and asserts the same thing.
 serving_like = (TG.load_frame(parquet_path)
-                .drop(columns=["engaged", "sample_weight"], errors="ignore")
+                .drop(columns=["engaged", "ts"] + LABEL_SIDE, errors="ignore")
                 .head(16))
+assert not ({"ts", "engaged"} | set(LABEL_SIDE)) & set(serving_like.columns), \
+    "training-only columns must not reach the signature or they become required inputs"
 for label, frame in [("one rail", serving_like.head(1)),
                      ("one viewer, many rails", serving_like),
                      ("features absent (lookup miss)",
-                      serving_like.head(3).drop(columns=FEATURE_COLS, errors="ignore"))]:
+                      serving_like.head(3).drop(columns=FEATURE_COLS, errors="ignore")),
+                     # Every looked-up feature is optional in the signature, so the
+                     # endpoint can hand predict() only the seven request fields.
+                     ("request keys only", serving_like[R.RAIL_REQUEST_KEYS].head(5))]:
     got = _probe.predict(None, frame)
+    assert len(got) == len(frame) and got["engagement_probability"].notna().all(), label
     print(f"self-test {label:34s} -> {len(got)} rows, ranks {sorted(got['rail_rank'])[:6]}")
 # COMMAND ----------
 # MAGIC %md

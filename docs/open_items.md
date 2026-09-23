@@ -65,7 +65,8 @@ behind the endpoint at 90/10 and restores 100%, and **`notebooks/30_advanced/33_
 adds the process**: paired per-entity scoring of identical requests, a gate on error rate,
 p95 and ranking agreement, a PROMOTE / ROLLBACK record in `canary_decisions`, and a
 guaranteed restore. Its first run rolled back the GPU challenger, which failed 40 of 40
-requests when served ([canary.md](canary.md)). What is still absent is an **online-quality**
+requests when served because its signature required the PIT `ts` column — fixed in notebook
+32, pending a retrain ([canary.md](canary.md)). What is still absent is an **online-quality**
 metric — engagement by served entity, joined from the inference table and the homepage log —
 which needs traffic volume and time a minutes-long gate does not have.
 
