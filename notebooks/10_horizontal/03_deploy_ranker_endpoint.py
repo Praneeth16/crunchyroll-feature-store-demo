@@ -56,7 +56,11 @@ ep_cfg = EndpointCoreConfigInput(
         entity_name=MODEL,
         entity_version=latest,
         workload_size="Small",
-        scale_to_zero_enabled=True,
+        # Off: the homepage service calls this in the request path, and a scaled-to-zero
+        # endpoint answers its first request in tens of seconds (the retriever measured
+        # 42 s on 2026-09-23). The app's timeout budget turns that into a fallback, so
+        # scale-to-zero here means the model never serves the first visitor.
+        scale_to_zero_enabled=False,
     )],
 )
 

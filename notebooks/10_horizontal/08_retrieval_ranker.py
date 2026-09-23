@@ -570,7 +570,9 @@ cfg_endpoint = EndpointCoreConfigInput(
         entity_name=cfg.t("crunchyroll_retriever"),
         entity_version=retriever_version,
         workload_size="Small",
-        scale_to_zero_enabled=True,
+        # Off for the same reason as notebook 03: in the request path, a cold start
+        # (42 s measured 2026-09-23) exceeds the app's retrieval budget every time.
+        scale_to_zero_enabled=False,
     )],
 )
 

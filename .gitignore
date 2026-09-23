@@ -17,3 +17,6 @@ dashboards/generated/
 # base64 trips secret scanners. Regenerate it from docs/deck/index.html when a
 # single sendable file is needed.
 docs/deck/*_standalone.html
+
+# The app frontend: dependencies and the build are produced where they run.
+node_modules/

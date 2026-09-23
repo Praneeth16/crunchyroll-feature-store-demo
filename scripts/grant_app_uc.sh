@@ -54,3 +54,18 @@ d=json.load(sys.stdin)
 hit=[a for a in (d.get('privilege_assignments') or []) if a.get('principal')==sp]
 print('  ', hit[0]['principal'], '->', ','.join(hit[0]['privileges'])) if hit else print('   NOT PRESENT')
 "
+
+# The ops footer's sync-lag panel reads each online table's sync status, which the API
+# answers only for principals that can VIEW the table's sync pipeline. Without this the
+# panel shows "does not have View permissions on pipeline" for every table.
+echo
+echo "granting CAN_VIEW on the online tables' sync pipelines:"
+for t in online_viewer_features online_recent_behavior online_title_features \
+         online_session_features online_viewer_rail online_rail_features; do
+  pid=$("$DB" api get "/api/2.0/database/synced_tables/$CATALOG.$SCHEMA.$t" --profile "$PROFILE" 2>/dev/null \
+        | python3 -c 'import json,sys; d=sys.stdin.read().strip(); print(((json.loads(d) if d else {}).get("data_synchronization_status") or {}).get("pipeline_id",""))')
+  if [ -z "$pid" ]; then echo "  skip $t (no sync pipeline)"; continue; fi
+  "$DB" permissions update pipelines "$pid" --profile "$PROFILE" --json "{
+    \"access_control_list\": [{\"service_principal_name\": \"$SP\", \"permission_level\": \"CAN_VIEW\"}]}" >/dev/null 2>&1 \
+    && echo "  granted CAN_VIEW on $t's pipeline" || echo "  FAILED on $t's pipeline $pid"
+done

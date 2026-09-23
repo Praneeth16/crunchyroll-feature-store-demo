@@ -15,6 +15,7 @@ discovered at run time.
 | | Why it matters |
 |---|---|
 | **Databricks CLI ≥ 1.17.0** | 1.14.1 cannot update an app in a bundle ([risks.md](docs/risks.md) §8b). `brew upgrade databricks` |
+| **Node.js ≥ 18** | `make deploy` builds the app's React frontend locally and ships the build; the app container does not run npm ([homepage_service.md](docs/homepage_service.md#files)). `brew install node` |
 | **A serverless workspace** | every task in this repo is a serverless notebook task; there is no cluster config anywhere |
 | **Unity Catalog, with a writable catalog** | all features, models and functions are UC objects |
 | **Online Feature Store (Lakebase) enabled** | needed for the online path. The batch path ([batch_and_online.md](docs/batch_and_online.md)) does not need it |

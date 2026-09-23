@@ -125,6 +125,8 @@ if want deploy; then
   ./scripts/render_dashboard.sh || die "render dashboard"
   "$DB" bundle validate "${BUNDLE[@]}" --strict >/dev/null || die "bundle validate"
   note "validated"
+  # The app ships a prebuilt frontend (databricks.yml sync.include); build it first.
+  (cd app/frontend && npm ci --no-audit --no-fund && npm run build) || die "frontend build (needs Node 18+)"
   "$DB" bundle deploy "${BUNDLE[@]}" || die "bundle deploy"
   note "jobs, checkpoint volume and dashboard deployed"
 fi

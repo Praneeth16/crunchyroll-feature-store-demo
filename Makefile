@@ -27,7 +27,7 @@ VARS    := $(shell test -f .crfs.vars && grep -v '^\#' .crfs.vars | grep -v '^CR
 FLAGS    = -t $(TARGET) --profile $(PROFILE) $(VARS)
 
 .DEFAULT_GOAL := help
-.PHONY: help up bootstrap render preflight validate deploy deploy-app demo vertical batch batch-incremental \
+.PHONY: help up bootstrap render preflight validate frontend deploy deploy-app demo vertical batch batch-incremental \
         probe feature-views versioning gpu-train bench bench-local \
         bench-pull streaming burst agent app-logs app-url cost verify teardown-cost teardown \
         destroy fmt
@@ -54,7 +54,10 @@ validate: render ## Lint the notebooks, then strict bundle validation
 	python3 scripts/check_notebooks.py
 	$(BUNDLE) validate --strict $(FLAGS)
 
-deploy: validate ## Deploy jobs, volume and dashboard
+frontend: ## Build the app's React frontend into app/frontend/dist
+	cd app/frontend && npm ci --no-audit --no-fund && npm run typecheck && npm run build
+
+deploy: validate frontend ## Deploy jobs, volume, dashboard and the app
 	$(BUNDLE) deploy $(FLAGS)
 
 # The app is a bundle resource now, so `deploy` already created or updated it and
