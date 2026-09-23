@@ -338,9 +338,9 @@ Recall@60 is reported against a popularity-only baseline and against random. If 
 does not beat popularity on this synthetic data, the notebook says so and popularity
 stays the baseline arm.
 
-The funnel is orchestrated by the application (`app/app.py`), not by a wrapper model —
-retriever, then the entitlement filter as one Postgres query, then the ranker on the
-survivors, with a latency chip per hop. A wrapper model would need an outbound HTTPS call
+The funnel is orchestrated by the application (`app/backend/homepage.py`), not by a wrapper
+model — retriever, then the entitlement filter, then the ranker on the survivors, with the
+time of each hop in the request waterfall. A wrapper model would need an outbound HTTPS call
 from inside model serving to reach the other endpoint, or a duplicated artifact; neither
 is worth it when the caller can make two calls.
 
@@ -469,27 +469,33 @@ Resources are declared at log time (`DatabricksServingEndpoint` ×2, `Databricks
 
 ## The app
 
-A Streamlit app on Databricks Apps — `app/app.py` (the six regions),
-`app/lib/lakebase.py` (the Postgres access layer, the same `OnlineStore` class as
-`src/crfs/online.py` but vendored so the app has no dependency on the repo's driver
-code) and `app/requirements.txt`. Its command and environment come from
+A homepage service on Databricks Apps: a FastAPI backend (`app/backend/`) and a React +
+Tailwind frontend (`app/frontend/`), replacing the Streamlit page on 2026-09-23 because
+that page spent ~2.4 s per view in SQL-warehouse statements before calling either model.
+The design, the measured latency and the fallback are in
+[homepage_service.md](homepage_service.md). Its command and environment come from
 [`resources/app.yml`](../resources/app.yml) rather than from an `app.yaml` in the source
 tree: Databricks Apps does not expand `${NAME}` inside `app.yaml`, so a template there
 had to be rendered before upload, and one deploy shipped without
 `RAIL_RANKER_ENDPOINT` because of it. The bundle resolves `${var.*}` itself.
 
-| Region in `app/app.py` | What it shows |
+![The deployed homepage service](../images/15-homepage-service.png)
+
+| Panel | What it shows |
 |---|---|
-| Sidebar — Configuration | Viewer, surface, device, locale, hour, model version, and a **frozen-vs-real clock** toggle. It defaults to frozen, because `session_decay` would otherwise re-score a demo left idle mid-sentence |
-| Funnel | `132 → 60 → N entitled → 25`, with a latency chip per hop |
-| Ranked Watch Next | Ranked cards, each with a "Why?" expander that calls the explainer agent |
-| Online Store (Raw) | The actual rows from the online tables, the SQL that produced them, and a keyed-read latency chip. On-demand values are labelled *computed at request time, not stored* |
-| Freshness | A **"watch 3 episodes now"** button that fires the `crfs_event_burst` job, then polls Postgres every 250 ms and reports the measured seconds until the online value moved, then re-ranks and diffs the ordering |
+| Control bar | Viewer, device, locale, surface, and a **frozen-vs-real clock** (UTC). It defaults to frozen, because `session_decay` would otherwise re-score a demo left idle mid-sentence. State lives in the URL, so a view can be linked |
+| Request waterfall | Every call one homepage made — both rankers, the retriever, three Lakebase reads — on one time axis, with the server total, the browser round trip, and session p50/p95 |
+| Vertical · rail order | Eligible rails ranked in one request, P(engage), positions moved against the dense-ranked editorial order, and a badge naming the tier that served it (model / cached / editorial) |
+| Horizontal · watch-next row | The real funnel (catalog → retrieved → entitled & unseen → ranked) and the ranked titles. **Why this?** streams a grounded explanation |
+| Fallback | Breaker state per endpoint, and a switch to simulate slow endpoints or open breakers so the fallback tiers can be shown live |
+| Lakebase raw row | The actual online rows (viewer × rail, viewer, recent behaviour), the SQL, and the keyed-read time |
+| Context sensitivity | Four contexts scored in parallel; changed ranks highlighted, and rails moved per context |
+| Freshness | **"Watch 3 episodes"** fires `crfs_event_burst`, streams progress while polling Postgres every 250 ms, reports the measured seconds until the online value moved, then re-ranks |
 | Operating it | Store capacity, Lakebase endpoint state, per-table sync lag and the last three days of spend, all read live |
 
-If the app's service principal has not been granted read access to the Postgres schema
-it degrades to reading the same values through the Feature Serving endpoint and shows a
-visible badge. A grant problem never takes the demo down.
+If the app's service principal has not been granted read access to the Postgres schema,
+the raw-row panel says so and the endpoints' own lookups are unaffected. A grant problem
+never takes the demo down.
 
 Two grant scripts, and both matter:
 

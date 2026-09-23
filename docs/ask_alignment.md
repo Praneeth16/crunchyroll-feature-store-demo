@@ -61,7 +61,7 @@ UDFs.** Nothing forked, nothing copied, no private per-model copy of a viewer fe
 | Deployment | met | notebook 23 resolves `@champion` → version 11 and pins the **immutable version**; promotion and deployment stay two separate steps |
 | Rollback | met | set the `model_version` widget to a previous version and rerun; in-place update, no rebuild |
 | Training at production volume | **partial** | the PIT join is Spark and scales; the **estimator does not** — `toPandas()` + scikit-learn is single-driver. Documented, with the substitution named (Spark ML / XGBoost on Spark from `load_df()`), and it does not touch the feature layer or serving path |
-| Canary / traffic splitting | **not met** | 100% of traffic goes to one version. Model Serving supports splitting; this POC does not use it |
+| Canary / traffic splitting | met, with a gate | `notebooks/30_advanced/33_canary_gate.py` (`make canary`): challenger at 10%, paired per-entity error / p95 / Spearman checks, PROMOTE or ROLLBACK recorded in `canary_decisions`, champion restored in a `finally`. First run **rolled back** the GPU challenger, which failed 40/40 requests when served. No online-quality metric yet — `docs/canary.md` |
 
 ---
 
@@ -95,7 +95,8 @@ UDFs.** Nothing forked, nothing copied, no private per-model copy of a viewer fe
 | Traffic spikes | met | 2 → 48 concurrent: p50 153 ms, p95 294 ms, **8,770 of 13,988 rejected**, 207 req/s served; recovery to baseline **immediate** (p50 54 ms, p95 69 ms) with 4 residual 429s |
 | Cold start | n/a by design | `scale_to_zero=false`, so there is none. The 1,454 ms first request from a laptop is TLS + first OAuth token fetch, client-side |
 | Scalability at real cardinality | **not met** | 4,681 online keys is not 50 million. Named as the top follow-up |
-| Fallback path | **not met** | no cached previous ranking, no editorial default on timeout, no circuit breaker. Given that the endpoint sheds load with 429, this is the most important thing Crunchyroll must build |
+| Fallback path | met, in the reference homepage service | timeout budget (300 ms) + circuit breaker per endpoint; rails fall back to the viewer's last good order (filtered to the current eligible set), then editorial; every response names its tier. Demonstrable from the app. `docs/homepage_service.md` |
+| End-to-end homepage latency (both rankers + online rows) | met | **94–109 ms p50 / 142–176 ms p95** server-side in region over two runs, 80/80 served by both models each time — `scripts/bench_app.py`. The previous app spent ~2.4 s per view in two SQL-warehouse statements before calling either model |
 
 Two vantage points are reported (`make bench` in region, `make bench-local` from a
 laptop) because a laptop saturates at 53.8 req/s and therefore sees **zero** 429s in
@@ -148,9 +149,10 @@ the original document, so it is recorded here as an addition rather than an ask 
 
 ## Nothing in the ask is unaddressed
 
-Every bullet in the ask has a row above. The three **not met** rows — traffic
-splitting, a scale test at real cardinality, and a fallback path — are deliberate
-scope decisions stated in `vertical_ranking.md` §6, not oversights.
+Every bullet in the ask has a row above. Of the three rows first marked **not met**,
+the fallback path is now built (`docs/homepage_service.md`) and traffic splitting has a
+gate around it (`docs/canary.md`); the scale test at real cardinality remains a
+deliberate scope decision stated in `vertical_ranking.md` §6.
 
 ## Where we went beyond the ask
 

@@ -880,3 +880,69 @@ where Model Serving builds the environment at deploy. Notebook 32 reports this r
 failing, having previously failed the whole 76-minute job over an optional comparison. The
 sklearn ranker is unaffected because scikit-learn is already in the worker, which is why the
 constraint stays invisible until a deep model appears.
+
+### V89 · The app's latency was two warehouse statements, not the models
+
+Measured 2026-09-23 before replacing the Streamlit page: the two SQL statements it ran per
+page view (rail eligibility state, entitled candidates) took **1.48 s and 1.43 s p50** from a
+laptop on a warm serverless warehouse — ~1.2 s each net of RTT, serial, before either
+endpoint was called. The endpoints themselves answer in tens of milliseconds.
+
+The replacement (FastAPI + React, `docs/homepage_service.md`) makes no warehouse call per
+request. Measured with `scripts/bench_app.py --n 80`, server-side inside the app container:
+
+| | p50 | p95 |
+|---|---|---|
+| homepage total, both rankers + 3 Lakebase reads | **94 ms** | **142 ms** |
+| rail ranker | 67 ms | 98 ms |
+| watch-next ranker | 61 ms | 92 ms |
+| Lakebase keyed read | 3.7–3.9 ms | 5–6 ms |
+
+80/80 served by both models. A second run minutes after a fresh deploy: p50 109 / p95 176 ms,
+again 80/80. The first run, before per-viewer retrieval caching, was p50 152 /
+p95 288 ms with 3/60 title rankings falling back at the 400 ms budget.
+
+### V90 · A pooled connection the server had already closed looked like an endpoint failure
+
+After ~100 s idle, the first call on each pooled HTTP/2 connection failed in **3 ms** with
+`Server disconnected` — the serving front end closes idle connections before the client's
+300 s keep-alive expiry. Reproduced twice. The breaker counted it as an endpoint failure, so
+the homepage served the editorial order to a healthy endpoint. Fixed with a 30 s idle expiry
+and one retry on a transport error; re-tested after 110 s idle: `status: ok`.
+
+### V91 · Two request-path endpoints were scaled to zero
+
+`crunchyroll-candidate-retriever` answered its first request in **42.6 s** (scaled to zero);
+`crunchyroll-watch-next-ranker` was also `scale_to_zero_enabled=true`. Both now `false`
+(live via `update-config`, and in notebooks 03 and 08). Cost note in `cost_and_sizing.md`.
+
+### V92 · The explainer agent's `predict()` is a placeholder
+
+`notebooks/50_agent/12_agent_explain.py` defines `CrunchyrollExplainerAgent.predict` to return
+`"Agent endpoint deployment required for live interaction"`, and no `crunchyroll-explainer-agent`
+endpoint exists on the workspace. Deploying it would have put a fixed string behind the app's
+"Why?" button. The app now calls `databricks-claude-haiku-4-5` directly with the online rows it
+read; first token ~1.1 s, full answer ~2.5 s.
+
+### V93 · Apps' in-container npm install failed on the workspace npm proxy
+
+First deploy of the React frontend: `npm warn tarball ... seems to be corrupted` for a dozen
+packages, then `E404 ... yallist-3.1.1.tgz is not in this registry` from
+`npm-proxy.cloud.databricks.com`, failing the deployment in 12.6 s. The build now happens on the
+laptop (`make frontend`) and `app/frontend/dist` is shipped through `sync.include`; with no
+`package.json` at the app root, Apps runs pip only.
+
+### V94 · The ops panel's sync lag was a missing grant
+
+Every table's sync status came back `User <app SP> does not have View permissions on pipeline
+...`. `scripts/grant_app_uc.sh` now grants CAN_VIEW on each online table's sync pipeline.
+
+### V95 · The canary gate's first decision: the GPU model does not serve
+
+`crfs_canary` run 833952297646682: `crunchyroll_rail_ranker_gpu` v5 behind
+`crunchyroll-rail-ranker` at 10%. Direct per-entity scoring of 40 viewers' eligible rails
+(616 rail rows): champion 0/40 errors, p50 74 / p95 134 ms; challenger **40/40 errors**.
+Routed: 176/200 answered, the 24 failures matching the 10% share. ROLLBACK; final routes
+`[('rail_ranker-11', 100)]`, asserted. The error text was not recorded — only counts — so
+`canary.summarise` now keeps the first error per entity. Why the torch model fails in
+serving is open; it is the first time it has been behind an endpoint.

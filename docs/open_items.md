@@ -61,11 +61,13 @@ Promotion and deployment are already two separate steps here (retrain moves
 the split itself, not the discipline around it.
 
 **Since:** `notebooks/30_advanced/31_feature_versioning.py` §6 puts two model versions
-behind the endpoint at 90/10, reads the realised routes back, fires requests across the
-split and restores 100% to the pinned version. What is still absent is the *process*
-around it — a metric to judge the canary on, a promotion gate, and an automatic rollback.
-Attribution would come from the inference table, which records the served entity per
-request; nothing in this POC reads it for that purpose.
+behind the endpoint at 90/10 and restores 100%, and **`notebooks/30_advanced/33_canary_gate.py`
+adds the process**: paired per-entity scoring of identical requests, a gate on error rate,
+p95 and ranking agreement, a PROMOTE / ROLLBACK record in `canary_decisions`, and a
+guaranteed restore. Its first run rolled back the GPU challenger, which failed 40 of 40
+requests when served ([canary.md](canary.md)). What is still absent is an **online-quality**
+metric — engagement by served entity, joined from the inference table and the homepage log —
+which needs traffic volume and time a minutes-long gate does not have.
 
 ---
 
@@ -93,16 +95,24 @@ scales; measuring it at Crunchyroll's cardinality is the outstanding test.
 
 ---
 
-## 5 · Not implemented: a fallback ranking
+## 5 · Fallback ranking — now built in the reference homepage service
 
 Past available capacity the endpoint returns **429** rather than queueing, and recovery
 is immediate. That is good behaviour, but it means the homepage must be able to render
 without a fresh ranking.
 
-This POC has no cached previous ranking, no editorial default on timeout, and no circuit
-breaker. If Crunchyroll already has a default order or a per-viewer cached ranking, this
-is a few lines in the homepage service. If not, its design affects the latency budget
-more than the model does and should be scoped alongside.
+**Since (2026-09-23):** the app is now a FastAPI homepage service that does exactly this —
+a timeout budget per call (rails 300 ms), a circuit breaker per endpoint, and three tiers:
+model → the viewer's last good order filtered to today's eligible set → editorial. Every
+response names the tier that served it, and the app can simulate slow or failed endpoints
+to show the tiers live. See [homepage_service.md](homepage_service.md#fallback--docsopen_itemsmd-5-now-built).
+
+**What is still Crunchyroll's to decide:** where the last-good ranking lives across a
+fleet (it is in-process here), how stale it may be before editorial is better, and the
+budget itself — which belongs to the homepage SLO, not the model. The budget matters: the
+in-region homepage is **~100 ms p50 / 140–180 ms p95** with both rankers (two runs), so a 300 ms budget is
+generous; a tighter one trades fallback rate for tail latency and should be set from the
+inference table's p99, not from these numbers.
 
 ---
 

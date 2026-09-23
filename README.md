@@ -49,6 +49,9 @@ question only Crunchyroll can answer (whether rendered rail position is in their
 | the guided tour of every step | [docs/walkthrough.md](docs/walkthrough.md) |
 | the batch-first path | [docs/batch_and_online.md](docs/batch_and_online.md) — same features, same model, `score_batch` |
 | serving latency and throughput | [docs/serving_benchmark.md](docs/serving_benchmark.md) — written by the job, not by hand |
+| **the whole flow on one page** | [architecture/end-to-end-flow.drawio](architecture/end-to-end-flow.drawio) ([PNG](architecture/end-to-end-flow.drawio.png)) — sources → features → stores → train/promote → serving → homepage service |
+| the app: both rankers in one request, and the fallback | [docs/homepage_service.md](docs/homepage_service.md) — ~100 ms p50 in region, budget + circuit breaker + cached/editorial tiers |
+| rolling out a new model version | [docs/canary.md](docs/canary.md) — the canary gate: split, judge, promote or roll back |
 | declarative feature authoring | [docs/feature_views.md](docs/feature_views.md) *(Public Preview)* |
 | changing a feature definition safely | [docs/feature_versioning.md](docs/feature_versioning.md) |
 | GPU training | [docs/gpu_training.md](docs/gpu_training.md) *(Public Preview)* |
@@ -116,9 +119,7 @@ flowchart LR
     H --> I
     F <--> S
     S --> AG
-    I -->|ranked titles| APP[Watch-next app]
-    S --> APP
-    AG --> APP
+    I -->|ranked titles| APP[Homepage service app<br/>FastAPI + React, fallback tiers]
     I -->|request + response| K[Inference tables<br/>monitoring & retraining]
 ```
 
@@ -149,7 +150,8 @@ make preflight  PROFILE=<PROFILE>   # prerequisites, and the ids this workspace 
 make deploy     PROFILE=<PROFILE>   # jobs, volume, dashboard AND the app -- one bundle deploy
 make demo       PROFILE=<PROFILE>   # horizontal: shared features + watch-next ranker (~35 min)
 make vertical   PROFILE=<PROFILE>   # vertical: rails, rail features, rail ranker (~15 min)
-make deploy-app PROFILE=<PROFILE>   # push the app source, then its four grants
+make deploy-app PROFILE=<PROFILE>   # build the React frontend, push the app, then its grants
+make canary     PROFILE=<PROFILE>   # judge a challenger behind the live endpoint (dry run)
 make bench      PROFILE=<PROFILE>   # load-test the rail endpoint, in region
 make verify     PROFILE=<PROFILE>   # assert the demo is presentable
 make cost       PROFILE=<PROFILE>   # what it is billing right now
@@ -383,8 +385,8 @@ resources/
                                         crfs_benchmark, crfs_batch, crfs_streaming,
                                         crfs_event_burst, crfs_agent, crfs_teardown
   jobs_advanced.yml                     crfs_preview_probe, crfs_feature_views,
-                                        crfs_versioning, crfs_gpu_train -- all preview APIs
-  app.yml                               the app: command, env and its four resources
+                                        crfs_versioning, crfs_canary, crfs_gpu_train
+  app.yml                               the app: command, env, budgets and its five resources
   storage.yml                           the crfs_ops volume (streaming checkpoints)
   lakebase.yml                          opt-in endpoint sizing, off by default
   dashboard.yml                         the AI/BI dashboard resource
@@ -417,6 +419,7 @@ notebooks/                              grouped by track; the number prefixes ar
     30_feature_views.py                 declare features, train from them, materialize
     31_feature_versioning.py            what a deployed model pins; the UDF experiment; a canary
     32_gpu_train.py                     torch on a serverless A10, same feature spec
+    33_canary_gate.py                   challenger at 10%, paired per-entity checks, gate
   40_streaming/
     10_streaming_continuous.py          streaming aggregate + CONTINUOUS publish
     11_event_producer.py                burst | loop | zerobus
@@ -434,6 +437,7 @@ src/crfs/                               driver-side only -- never imported by a 
                                         rail + viewer_rail feature builders, eligibility
   udfs.py                               the 4 title UDFs + 3 rail UDFs + FeatureFunctions
   versioning.py                         read a model's pinned feature spec; fingerprint; drift
+  canary.py                             split/restore config, per-entity scoring, the gate
   train_gpu.py                          export to a volume, then torch minibatch training
   candidates.py                         REQUEST_KEYS, candidates(), query_ranker(), rank()
   loadtest.py                           the benchmark phases: fanout, ramp, spike, reporting
@@ -442,10 +446,14 @@ src/crfs/                               driver-side only -- never imported by a 
 ai/                                     the AI Runtime CLI path (`air`)
   train.yaml                            accelerator, dependencies, code snapshot, timeout
   train_entrypoint.py                   headless entry point; calls src/crfs/train_gpu.py
-app/
-  app.py                                the six regions
-  lib/lakebase.py                       vendored Postgres access layer
-  requirements.txt                      streamlit, psycopg, databricks-sdk
+app/                                    the homepage service -- docs/homepage_service.md
+  backend/main.py                       FastAPI routes, SSE (explain, burst), static files
+  backend/homepage.py                   one request: both rankers + online rows, fanned out
+  backend/fallback.py                   timeout budget, circuit breaker, fallback tiers
+  backend/snapshot.py                   reference data in memory: no warehouse per request
+  backend/clients.py                    HTTP/2 serving client, async Postgres pool, warehouse
+  frontend/                             React + TypeScript + Tailwind (Vite); `make frontend`
+  requirements.txt                      fastapi, uvicorn, httpx, psycopg[pool], databricks-sdk
 dashboards/crfs_feature_ops.lvdash.json six datasets, one page
 scripts/
   bootstrap.sh                          discover or create the infrastructure; write .crfs.vars
@@ -457,6 +465,7 @@ scripts/
   grant_app_uc.sh                       USE_CATALOG / USE_SCHEMA / SELECT for the app SP
   lakebase_explore.sh                   psql into the online store
   measure_online_latency.py             keyed-read latency from a laptop
+  bench_app.py                          the deployed homepage service, per stage, in region
   benchmark_local.py                    the serving benchmark from outside the region
   validate_dashboard_queries.sh         run every dashboard query before committing it
   teardown.sh                           money first, data last; --full to include data
@@ -528,15 +537,17 @@ path for rail features — are enumerated with their consequences in
 - **No Vector Search.** The retriever's item factors live in the model artifact; the
   README says where that stops scaling.
 - **Synthetic data only.** No real Crunchyroll data anywhere.
-- **No agent run yet.** `notebooks/50_agent/12_agent_explain.py` is written against the working
-  Feature Serving endpoint but has not been executed. `make agent` is the whole command;
-  it is the smallest remaining gap in the story.
+- **The explainer agent is a placeholder.** `notebooks/50_agent/12_agent_explain.py`'s
+  pyfunc `predict()` returns a fixed string, and no agent endpoint is deployed. The app's
+  "Why this?" therefore calls a foundation model directly, grounded on the online rows the
+  service read (`docs/homepage_service.md`). Making notebook 12 a real tool-calling agent is
+  still open.
 - **Twelve screenshots are missing, and the twelve that exist predate the corrections.**
   Named, with capture instructions, in [docs/walkthrough.md](docs/walkthrough.md#screenshots--what-exists-and-what-is-missing). Nothing in the text
   depends on them.
-- **The app page and the dashboard have never been opened.** Both deploy, the app's logs
-  are clean and all six dashboard datasets return rows, but no human has looked at either
-  rendered surface.
+- **The dashboard has never been opened.** All six datasets return rows, but no human
+  has looked at the rendered surface. The app has — `images/15-homepage-service.png` is
+  the deployed page, captured 2026-09-23.
 
 ## Going deeper
 
@@ -552,8 +563,9 @@ path for rail features — are enumerated with their consequences in
 
 Natural next threads: two-tower retrieval with Vector Search feeding this ranker;
 migrating the viewer-grain aggregates to Feature Views once the preview reaches
-Crunchyroll's region; a real Kafka topic for sub-second Stream Feature Views; and the
-canary from notebook 31 adjudicated from the inference tables rather than by hand.
+Crunchyroll's region; a real Kafka topic for sub-second Stream Feature Views; and an
+online-quality metric (clicks by served entity from the inference table) added to the
+canary gate in notebook 33, which today judges errors, latency and ranking agreement.
 
 ## Provenance
 

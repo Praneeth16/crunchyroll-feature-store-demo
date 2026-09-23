@@ -203,7 +203,9 @@ settling before November.
 
 ## Act 4 · ONLINE — where they are going (10 min)
 
-**Open the app.** Left sidebar: viewer, device, hour, clock.
+**Open the app.** Control bar across the top: viewer, device, hour, clock. Point at the
+request waterfall first — both rankers and three Lakebase reads, fanned out, **~100 ms** on
+the server.
 
 **Beat 1 — the collection order.** Pick viewer `v0001`. Show the ranked collections, the
 probability per collection, and the incumbent editorial order beside it.
@@ -230,8 +232,14 @@ service would.
 **Beat 5 — context changes the answer.** Flip hour 09:00 ↔ 21:00 and device mobile ↔ TV.
 Nothing in the feature store changes. **5 to 12 of 16 collections move** — read the count
 off the app rather than quoting a fixed number, because two request-time features decay with
-the clock and the spread moves between runs. (Re-verified live
-today with four direct endpoint calls.)
+the clock and the spread moves between runs. The *Context sensitivity* panel scores all four
+in parallel and counts the moves.
+
+**Beat 6 — the homepage survives the endpoint.** In the *Fallback* panel pick "Endpoints
+slow". The rail badge turns **cached**: the viewer's last good order, filtered to today's
+eligible rails, rendered at the budget instead of waiting. This is open item #5 — the endpoint
+sheds load with 429 at peak, so this is the part of the homepage service Crunchyroll must own.
+Switch back to "Healthy".
 
 ---
 
