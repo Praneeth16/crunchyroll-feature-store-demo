@@ -51,6 +51,7 @@ from src.crfs import candidates as C
 from src.crfs import rails as R
 from src.crfs import udfs as U
 from src.crfs import versioning as V
+from src.crfs import canary as K
 
 cfg = Config.from_widgets(dbutils, extra_widgets={
     "vers_model": "crunchyroll_rail_ranker",   # the model whose spec is inspected
@@ -374,33 +375,10 @@ else:
     live = (ep.config.served_entities or [])[0]
 
 
-    def _plain(v):
-        """SDK enums are not JSON serializable, and the endpoint config goes over REST.
-        `live.workload_type` comes back as ServingModelWorkloadType, so a straight copy
-        fails with `TypeError: Object of type ServingModelWorkloadType is not JSON
-        serializable` -- from json.dumps, which names the type and not the field."""
-        return getattr(v, "value", v)
-
-
+    # Enum coercion and realised-sizing copy live in src/crfs/canary.py, shared with
+    # notebook 33's promotion gate so the two cannot drift on either bug (94eb638, de3e95c).
     def sized(name, version):
-        """Copy the sizing mode the endpoint actually realised.
-
-        `workload_size` and the provisioned-concurrency pair are mutually exclusive in
-        the API, and notebook 23 asks for the explicit pair but falls back to
-        `workload_size` if the workspace rejects it. On a workspace that took the
-        fallback, the concurrency fields are None -- sending them as null while omitting
-        workload_size preserves neither mode, and can reject the update or silently reset
-        capacity on the demo's request-path endpoint.
-        """
-        out = {"name": name, "entity_name": live.entity_name,
-               "entity_version": str(version), "scale_to_zero_enabled": False,
-               "workload_type": _plain(live.workload_type) or "CPU"}
-        if live.min_provisioned_concurrency is not None:
-            out["min_provisioned_concurrency"] = live.min_provisioned_concurrency
-            out["max_provisioned_concurrency"] = live.max_provisioned_concurrency
-        else:
-            out["workload_size"] = _plain(live.workload_size)
-        return out
+        return K.sized(live, name, version)
 
 
     base = sized(live.name, live.entity_version)
@@ -418,24 +396,7 @@ else:
     print(f"\nsplit requested: v{SERVED_VERSION} {100 - CANARY_PCT}% / v{prev} {CANARY_PCT}%")
 # COMMAND ----------
 def wait_config(timeout_s=1800):
-    """Wait on the endpoint's own config-update state rather than sleeping.
-
-    A served entity has to be built and brought up, so this is minutes. Reporting the
-    state each time makes a slow update distinguishable from a stuck one.
-    """
-    deadline = time.time() + timeout_s
-    last = None
-    while time.time() < deadline:
-        e = w.serving_endpoints.get(name=ENDPOINT)
-        st = e.state
-        cur = (getattr(st, "config_update", None), getattr(st, "ready", None))
-        if cur != last:
-            print(f"  config_update={cur[0]} ready={cur[1]}")
-            last = cur
-        if str(cur[0]) in ("EndpointStateConfigUpdate.NOT_UPDATING", "NOT_UPDATING"):
-            return e
-        time.sleep(20)
-    raise TimeoutError(f"{ENDPOINT} config update did not settle in {timeout_s}s")
+    return K.wait_config(w, ENDPOINT, timeout_s=timeout_s)
 
 
 # Everything after the split PUT runs inside try/finally. If wait_config() times out or

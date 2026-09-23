@@ -8,6 +8,7 @@
 #   make probe          does this workspace have the two previews the advanced track needs
 #   make feature-views  Feature Views: declare features, train from them, materialize
 #   make versioning     feature-definition versioning against the live endpoint
+#   make canary         judge a challenger behind the live endpoint; promote or roll back
 #   make gpu-train      train the rail ranker on a serverless GPU (billable)
 #   make bench          measure the rail endpoint under load, in region
 #   make bench-local    the same benchmark from this laptop, for contrast
@@ -28,7 +29,7 @@ FLAGS    = -t $(TARGET) --profile $(PROFILE) $(VARS)
 
 .DEFAULT_GOAL := help
 .PHONY: help up bootstrap render preflight validate frontend deploy deploy-app demo vertical batch batch-incremental \
-        probe feature-views versioning gpu-train bench bench-local \
+        probe feature-views versioning canary gpu-train bench bench-local \
         bench-pull streaming burst agent app-logs app-url cost verify teardown-cost teardown \
         destroy fmt
 
@@ -107,6 +108,9 @@ feature-views: deploy ## Declarative authoring: Feature Views for training, then
 
 versioning: deploy ## What a deployed model pins, what an in-place change does, and a canary
 	$(BUNDLE) run crfs_versioning $(FLAGS)
+
+canary: deploy ## Canary gate: challenger at 10%, judged, then promote or roll back (dry run)
+	$(BUNDLE) run crfs_canary $(FLAGS)
 
 gpu-train: deploy ## Train the rail ranker on a serverless GPU (A10). Billable.
 	$(BUNDLE) run crfs_gpu_train $(FLAGS)

@@ -125,6 +125,35 @@ resources:
           # served entity. Measured in minutes, not seconds.
           timeout_seconds: 5400
 
+    crfs_canary:
+      name: crfs_canary
+      description: >-
+        Canary gate for the rail ranker: put a challenger (the GPU model's @challenger,
+        else the champion's previous version) behind the live endpoint at a small share,
+        score identical requests on both served entities, gate on error rate, p95 and
+        ranking agreement, record PROMOTE/ROLLBACK in canary_decisions, and restore the
+        champion unless apply=true and the gate passed.
+      max_concurrent_runs: 1
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
+      tags:
+        demo: crunchyroll-feature-store
+        layer: advanced
+      tasks:
+        - task_key: canary_gate
+          notebook_task:
+            notebook_path: ../notebooks/30_advanced/33_canary_gate.py
+            base_parameters:
+              <<: *common_params
+              challenger_model: crunchyroll_rail_ranker_gpu
+              challenger_alias: challenger
+              canary_percent: "10"
+              apply: "false"
+          # Two config updates, one of which builds a served entity for a model this
+          # endpoint has never served (torch, for the GPU challenger).
+          timeout_seconds: 5400
+
     crfs_gpu_train:
       name: crfs_gpu_train
       description: >-
