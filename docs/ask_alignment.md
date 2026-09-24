@@ -61,7 +61,7 @@ UDFs.** Nothing forked, nothing copied, no private per-model copy of a viewer fe
 | Deployment | met | notebook 23 resolves `@champion` → version 11 and pins the **immutable version**; promotion and deployment stay two separate steps |
 | Rollback | met | set the `model_version` widget to a previous version and rerun; in-place update, no rebuild |
 | Training at production volume | **partial** | the PIT join is Spark and scales; the **estimator does not** — `toPandas()` + scikit-learn is single-driver. Documented, with the substitution named (Spark ML / XGBoost on Spark from `load_df()`), and it does not touch the feature layer or serving path |
-| Canary / traffic splitting | met, with a gate | `notebooks/30_advanced/33_canary_gate.py` (`make canary`): challenger at 10%, paired per-entity error / p95 / Spearman checks, PROMOTE or ROLLBACK recorded in `canary_decisions`, champion restored in a `finally`. First run **rolled back** the GPU challenger, which failed 40/40 requests when served: its signature required the point-in-time `ts` column (fixed in notebook 32; needs a retrain). No online-quality metric yet — `docs/canary.md` |
+| Canary / traffic splitting | met, with a gate | `notebooks/30_advanced/33_canary_gate.py` (`make canary`): challenger at 10%, paired per-entity error / p95 / Spearman checks, PROMOTE or ROLLBACK recorded in `canary_decisions`, champion restored in a `finally`. First run **rolled back** the GPU challenger, which failed 40/40 requests when served: its signature required the point-in-time `ts` column. Fixed in notebook 32; the retrained v6 then **passed** the gate (0/40 errors, p95 139 ms, Spearman 0.61). No online-quality metric yet — `docs/canary.md` |
 
 ---
 

@@ -955,3 +955,15 @@ model's signature required it; the endpoint only ever sends the seven request fi
 32 now drops `ts` and the label-side columns from the example, asserts none remain, and runs a
 "request keys only" self-test before `fe.log_model`. v5 is unchanged; a retrain registers a
 fixed version.
+
+### V97 · The GPU fix, proven: v6 serves; the metastore quota was the last blocker
+
+Two serverless A10 attempts never got an accelerator (50 min in "Waiting for cluster", then
+`Cluster '...-cnx' is unhealthy`, 0 ms executed; the second cancelled). A one-off run on
+`GPU_1xH100` got one in ~4 min and trained (13.5 s, 5% sample, 2 epochs), then failed at
+registration: `QUOTA_EXCEEDED: Cannot create 1 Registered Model(s) in Metastore ... (estimated
+count: 5001, limit: 5000)` — MLflow's register path calls create_registered_model first, and
+the quota check precedes the already-exists check. Notebook 32 now logs, then adds the version
+with `create_model_version` when the model exists. Rerun registered v6; `crfs_canary` then
+scored it **0/40 errors, p95 139 ms vs 150 ms limit, Spearman 0.61 → PROMOTE** (dry run).
+Four unused registered models of this user were deleted to take the metastore under quota.

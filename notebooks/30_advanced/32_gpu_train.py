@@ -414,7 +414,6 @@ with mlflow.start_run(run_name="crunchyroll_rail_ranker_gpu") as run:
         artifact_path="rail_ranker_gpu",
         flavor=mlflow.pyfunc,
         training_set=training_set,
-        registered_model_name=MODEL,
         artifacts=_LocalCtx.artifacts,
         input_example=serving_like.head(3),
         extra_pip_requirements=[f"torch=={torch.__version__.split('+')[0]}"],
@@ -428,7 +427,20 @@ with mlflow.start_run(run_name="crunchyroll_rail_ranker_gpu") as run:
                        "label_sample_frac": FRAC})
     run_id = run.info.run_id
 
-version = max(int(v.version) for v in mc.search_model_versions(f"name='{MODEL}'"))
+# Registered in a second step rather than via registered_model_name. The shared
+# metastore this was built on sits at its 5,000-registered-model quota, and MLflow's
+# register path calls create_registered_model first: the quota check fires before the
+# already-exists check, so even a new VERSION of an existing model failed with
+#   QUOTA_EXCEEDED: Cannot create 1 Registered Model(s) ... (limit: 5000)
+# Creating the version directly needs no new model. (verification_log.md V97)
+model_uri = f"runs:/{run_id}/rail_ranker_gpu"
+try:
+    mc.get_registered_model(MODEL)
+    version = int(mc.create_model_version(MODEL, source=model_uri, run_id=run_id).version)
+except mlflow.exceptions.RestException as e:
+    if "RESOURCE_DOES_NOT_EXIST" not in str(e) and "NOT_FOUND" not in str(e):
+        raise
+    version = int(mlflow.register_model(model_uri, MODEL).version)
 print(f"registered {MODEL} v{version} (run {run_id})")
 
 spec = V.feature_spec_of(f"models:/{MODEL}/{version}")
