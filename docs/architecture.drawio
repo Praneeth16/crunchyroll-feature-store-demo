@@ -8,7 +8,7 @@
         <mxCell id="t_title" value="Crunchyroll vertical ranking — one feature store, one model, two serving paths" style="text;html=1;fontSize=20;fontStyle=1;align=left;verticalAlign=middle;fontColor=#1B1B1F;" vertex="1" parent="1">
           <mxGeometry x="40" y="20" width="900" height="30" as="geometry" />
         </mxCell>
-        <mxCell id="t_sub" value="Measured on serverless_lakebase_praneeth_catalog.crunchyroll_demo · model version 10 @champion" style="text;html=1;fontSize=12;align=left;verticalAlign=middle;fontColor=#5C5F6B;" vertex="1" parent="1">
+        <mxCell id="t_sub" value="Measured on the reference workspace (AWS us-east-1) · rail ranker @champion" style="text;html=1;fontSize=12;align=left;verticalAlign=middle;fontColor=#5C5F6B;" vertex="1" parent="1">
           <mxGeometry x="40" y="48" width="900" height="20" as="geometry" />
         </mxCell>
 

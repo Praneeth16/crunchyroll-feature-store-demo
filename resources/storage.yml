@@ -8,7 +8,7 @@
 # `mode: development` prefixes the resource name, and a registered model's name is
 # a three-level UC name, so the prefix lands in front of the catalog:
 #
-#   CreateRegisteredModel name "dev_praneeth_paikray_serverless_lakebase_...
+#   CreateRegisteredModel name "dev_<user>_<catalog>...
 #   .crunchyroll_demo.crunchyroll_ranker" is not a valid name
 #
 # Even with the leaf-name form the prefix produces a *different* model from the one

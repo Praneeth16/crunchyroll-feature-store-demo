@@ -1,6 +1,6 @@
 """Measure the deployed homepage service: server-side time per stage, as the app reports it.
 
-    python3 scripts/bench_app.py --profile fe-vm-lakebase-praneeth [--n 60]
+    python3 scripts/bench_app.py --profile <PROFILE> [--n 60]
 
 `total_ms` is measured inside the app container, so it is the in-region number the
 homepage would see. The laptop round trip is printed too, for contrast: it adds the

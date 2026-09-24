@@ -11,7 +11,8 @@
 # Queries against tables a stage has not created yet are reported as SKIP, not
 # FAIL -- the benchmark datasets are legitimately empty until `make bench` runs.
 set -uo pipefail
-PROFILE="${1:-fe-vm-lakebase-praneeth}"
+PROFILE="${1:-$(grep -s '^CRFS_PROFILE=' "$(dirname "$0")/../.crfs.vars" | cut -d= -f2- || true)}"
+[ -n "$PROFILE" ] || { echo "usage: $0 <PROFILE>   (databricks auth profiles lists yours)" >&2; exit 2; }
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 DASH="$HERE/dashboards/generated/crfs_feature_ops.lvdash.json"
 DB=$(command -v databricks || echo /opt/homebrew/bin/databricks)

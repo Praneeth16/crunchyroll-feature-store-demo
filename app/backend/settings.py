@@ -3,9 +3,9 @@ import os
 
 env = os.environ.get
 
-CATALOG = env("DATABRICKS_CATALOG", "serverless_lakebase_praneeth_catalog")
+CATALOG = env("DATABRICKS_CATALOG", "main")
 SCHEMA = env("DATABRICKS_SCHEMA", "crunchyroll_demo")
-WAREHOUSE_ID = env("DATABRICKS_WAREHOUSE_ID", "4d39ac2e32b72a3a")
+WAREHOUSE_ID = env("DATABRICKS_WAREHOUSE_ID", "")
 RANKER_ENDPOINT = env("RANKER_ENDPOINT", "crunchyroll-watch-next-ranker")
 RAIL_RANKER_ENDPOINT = env("RAIL_RANKER_ENDPOINT", "crunchyroll-rail-ranker")
 RETRIEVER_ENDPOINT = env("RETRIEVER_ENDPOINT", "crunchyroll-candidate-retriever")

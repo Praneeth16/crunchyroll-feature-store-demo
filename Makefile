@@ -15,15 +15,21 @@
 #   make cost           what the online store is billing right now
 #   make teardown-cost  stop the money, keep the data
 #
-# PROFILE and TARGET are overridable:  make deploy PROFILE=my-ws TARGET=prod
+# PROFILE is your ~/.databrickscfg profile. Pass it once -- `make up PROFILE=my-ws` or
+# `make bootstrap PROFILE=my-ws` -- and it is remembered in .crfs.vars (gitignored).
+# TARGET is overridable too:  make deploy PROFILE=my-ws TARGET=prod
 
-PROFILE ?= fe-vm-lakebase-praneeth
+PROFILE ?= $(shell test -f .crfs.vars && grep '^CRFS_PROFILE=' .crfs.vars | cut -d= -f2-)
+ifeq ($(strip $(PROFILE)),)
+ifneq ($(filter-out help,$(or $(MAKECMDGOALS),help)),)
+$(error No profile. Pass PROFILE=<name> -- `databricks auth profiles` lists yours)
+endif
+endif
 TARGET  ?= dev
 DB      ?= databricks
 BUNDLE   = $(DB) bundle
-# Generated per-workspace ids, if scripts/bootstrap.sh has run. Absent, the
-# defaults in databricks.yml apply -- which are the ids of the workspace this was
-# built on and will be wrong anywhere else.
+# Generated per-workspace ids, if scripts/bootstrap.sh has run. Absent, the bundle
+# stops on the variables that have no default (warehouse_id, notification_email).
 VARS    := $(shell test -f .crfs.vars && grep -v '^\#' .crfs.vars | grep -v '^CRFS_' | grep '=' | sed 's/^/--var=/' | tr '\n' ' ')
 FLAGS    = -t $(TARGET) --profile $(PROFILE) $(VARS)
 
@@ -121,17 +127,17 @@ bench: deploy ## Measure the rail endpoint under load from inside the region
 bench-local: ## The same benchmark from this laptop -- the contrast is the point
 	python3 scripts/benchmark_local.py --profile $(PROFILE)
 
-# The catalog/schema fallbacks are resolved by make, not by a shell `||`: in
+# The schema fallback is resolved by make, not by a shell `||`: in
 # `$(grep ... | cut ... || echo default)` the `||` tests the PIPELINE's status, which is
 # `cut`'s, and cut succeeds on empty input. So with no .crfs.vars (the fresh-clone
 # state -- the file is gitignored) both expanded to empty and the path became
 # dbfs:/Volumes///crfs_ops/... Verified by running the pattern in isolation.
 BENCH_CATALOG := $(shell test -f .crfs.vars && grep '^catalog=' .crfs.vars | cut -d= -f2-)
 BENCH_SCHEMA  := $(shell test -f .crfs.vars && grep '^schema=' .crfs.vars | cut -d= -f2-)
-BENCH_CATALOG := $(if $(BENCH_CATALOG),$(BENCH_CATALOG),serverless_lakebase_praneeth_catalog)
 BENCH_SCHEMA  := $(if $(BENCH_SCHEMA),$(BENCH_SCHEMA),crunchyroll_demo)
 
 bench-pull: ## Copy the benchmark write-up out of the ops volume into docs/
+	@test -n "$(BENCH_CATALOG)" || { echo "no catalog in .crfs.vars -- run make bootstrap first"; exit 1; }
 	@$(DB) fs cp \
 	  "dbfs:/Volumes/$(BENCH_CATALOG)/$(BENCH_SCHEMA)/crfs_ops/benchmark/serving_benchmark.md" \
 	  docs/serving_benchmark.md --profile $(PROFILE) --overwrite \

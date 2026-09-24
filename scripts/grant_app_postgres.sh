@@ -13,12 +13,16 @@
 #
 #   ./scripts/grant_app_postgres.sh <profile> [app-name]
 set -uo pipefail
-PROFILE="${1:-fe-vm-lakebase-praneeth}"
+PROFILE="${1:-$(grep -s '^CRFS_PROFILE=' "$(dirname "$0")/../.crfs.vars" | cut -d= -f2- || true)}"
+[ -n "$PROFILE" ] || { echo "usage: $0 <PROFILE>   (databricks auth profiles lists yours)" >&2; exit 2; }
 APP="${2:-${APP:-crfs-watch-next}}"
-CATALOG="${CATALOG:-serverless_lakebase_praneeth_catalog}"
-SCHEMA="${SCHEMA:-crunchyroll_demo}"
-DB=$(command -v databricks || echo /opt/homebrew/bin/databricks)
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
+CRFS_CATALOG=$(grep -s '^catalog=' "$HERE/.crfs.vars" | cut -d= -f2- || true)
+CRFS_SCHEMA=$(grep -s '^schema=' "$HERE/.crfs.vars" | cut -d= -f2- || true)
+CATALOG="${CATALOG:-$CRFS_CATALOG}"
+SCHEMA="${SCHEMA:-${CRFS_SCHEMA:-crunchyroll_demo}}"
+[ -n "$CATALOG" ] || { echo "no catalog: set CATALOG=... or run scripts/bootstrap.sh first" >&2; exit 2; }
+DB=$(command -v databricks || echo /opt/homebrew/bin/databricks)
 
 SP=$("$DB" apps get "$APP" --profile "$PROFILE" -o json 2>/dev/null \
      | python3 -c 'import json,sys; print(json.load(sys.stdin).get("service_principal_client_id",""))')

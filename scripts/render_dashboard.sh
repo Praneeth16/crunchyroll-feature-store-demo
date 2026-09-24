@@ -26,7 +26,8 @@ if [ -z "$CATALOG" ] && [ -f "$HERE/.crfs.vars" ]; then
   CATALOG=$(grep '^catalog=' "$HERE/.crfs.vars" | cut -d= -f2- || true)
   SCHEMA=$(grep '^schema=' "$HERE/.crfs.vars" | cut -d= -f2- || true)
 fi
-CATALOG="${CATALOG:-serverless_lakebase_praneeth_catalog}"
+# `main` matches databricks.yml's default; bootstrap replaces it with the real catalog.
+CATALOG="${CATALOG:-main}"
 SCHEMA="${SCHEMA:-crunchyroll_demo}"
 
 mkdir -p "$OUT_DIR"

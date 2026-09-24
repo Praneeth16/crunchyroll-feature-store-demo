@@ -1,7 +1,7 @@
 # AI Runtime CLI workload: the same GPU training, submitted from a laptop.
 #
 #   uv tool install --force databricks-air --python 3.12
-#   air run --file ai/train.yaml -p fe-vm-lakebase-praneeth --watch
+#   air run --file ai/train.yaml -p <PROFILE> --watch
 #
 # Why this exists alongside the job in resources/jobs_advanced.yml: the job is how
 # scheduled retraining belongs in a bundle, and this is how a person iterates on
@@ -16,16 +16,17 @@
 #
 # Accelerators: GPU_1xA10 (1 GPU, cheapest), GPU_1xH100 (1), GPU_8xH100 (multiples of
 # 8). num_accelerators must match the per-node count encoded in the type.
-experiment_name: /Users/praneeth.paikray@databricks.com/crunchyroll_rail_ranker_gpu
+experiment_name: /Shared/crunchyroll_rail_ranker_gpu
 
 compute:
   accelerator_type: GPU_1xA10
   num_accelerators: 1
 
 # Bash, so the argument list is visible in the run page rather than buried in a wrapper.
+# Replace `main` in --parquet with your catalog (the `catalog=` line in .crfs.vars).
 command: >-
   python ai/train_entrypoint.py
-  --parquet /Volumes/serverless_lakebase_praneeth_catalog/crunchyroll_demo/crfs_ops/gpu_training/training_set
+  --parquet /Volumes/main/crunchyroll_demo/crfs_ops/gpu_training/training_set
   --epochs 8
   --batch-size 4096
   --lr 0.001

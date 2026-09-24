@@ -11,7 +11,7 @@ Use this to answer "what will our own client see", and the in-region job to answ
 "what does the platform cost per request". Reporting only one of the two is how
 latency conversations go wrong.
 
-    python3 scripts/benchmark_local.py --profile fe-vm-lakebase-praneeth
+    python3 scripts/benchmark_local.py --profile <PROFILE>
     python3 scripts/benchmark_local.py --profile P --levels 1,4,16 --skip-spike
 
 Requires the workspace SDK and requests:  pip install databricks-sdk requests

@@ -11,10 +11,11 @@ GENRES = ["action", "adventure", "fantasy", "sci_fi", "sports", "drama", "romanc
 
 MATURITY_RANK = {"all": 0, "13+": 1, "16+": 2, "18+": 3}
 
-# Widget name -> default. Defaults match the workspace the demo was built on so
-# every notebook still runs standalone from the workspace UI.
+# Widget name -> default. Jobs always pass every value from the bundle, so these only
+# matter when a notebook is run by hand: set the catalog widget (and warehouse_id for
+# notebook 12) to the values scripts/bootstrap.sh wrote to .crfs.vars.
 DEFAULTS = {
-    "catalog": "serverless_lakebase_praneeth_catalog",
+    "catalog": "main",
     "schema": "crunchyroll_demo",
     "online_store": "crunchyroll-online-store",
     "lakebase_project": "crunchyroll-online-store",
@@ -29,7 +30,7 @@ DEFAULTS = {
     "feature_endpoint": "crunchyroll-viewer-features",
     "agent_endpoint": "crunchyroll-explainer-agent",
     "llm_endpoint": "databricks-claude-sonnet-4-5",
-    "warehouse_id": "4d39ac2e32b72a3a",
+    "warehouse_id": "",
     "end_date": "",          # "" -> yesterday
     "volume": "crfs_ops",
 }

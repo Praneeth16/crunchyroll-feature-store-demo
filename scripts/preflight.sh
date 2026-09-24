@@ -3,7 +3,8 @@
 # cannot guess. Read-only unless --resize is passed.
 set -uo pipefail
 
-PROFILE="${1:-fe-vm-lakebase-praneeth}"
+PROFILE="${1:-$(grep -s '^CRFS_PROFILE=' "$(dirname "$0")/../.crfs.vars" | cut -d= -f2- || true)}"
+[ -n "$PROFILE" ] || { echo "usage: $0 <PROFILE>   (databricks auth profiles lists yours)" >&2; exit 2; }
 shift || true
 RESIZE=""
 MIN_CU="${MIN_CU:-4}"
@@ -20,7 +21,8 @@ if [ -f "$HERE/.crfs.vars" ]; then
   CRFS_SCHEMA=$(grep '^schema=' "$HERE/.crfs.vars" | cut -d= -f2-)
   CRFS_STORE=$(grep '^online_store=' "$HERE/.crfs.vars" | cut -d= -f2-)
 fi
-CATALOG="${CATALOG:-${CRFS_CATALOG:-serverless_lakebase_praneeth_catalog}}"
+CATALOG="${CATALOG:-${CRFS_CATALOG:-}}"
+[ -n "$CATALOG" ] || { echo "no catalog: set CATALOG=... or run scripts/bootstrap.sh first" >&2; exit 2; }
 SCHEMA="${SCHEMA:-${CRFS_SCHEMA:-crunchyroll_demo}}"
 STORE="${STORE:-${CRFS_STORE:-crunchyroll-online-store}}"
 PROJECT="${PROJECT:-$STORE}"
@@ -38,7 +40,21 @@ echo "preflight  profile=$PROFILE  target=$CATALOG.$SCHEMA"
 echo
 
 ver=$("$DB" --version 2>/dev/null | tr -d 'v' | awk '{print $NF}')
-if [ -n "$ver" ]; then ok "databricks CLI $ver"; else bad "databricks CLI not found"; fi
+if [ -z "$ver" ]; then
+  bad "databricks CLI not found"
+elif python3 -c "import sys; sys.exit(tuple(map(int, '$ver'.split('.')[:3])) < (1, 17, 0))" 2>/dev/null; then
+  ok "databricks CLI $ver"
+else
+  # 1.14.1 cannot update an app in a bundle (docs/risks.md §8b).
+  bad "databricks CLI $ver is older than 1.17.0 - brew upgrade databricks"
+fi
+
+node_major=$(node --version 2>/dev/null | tr -d 'v' | cut -d. -f1)
+if [ -n "$node_major" ] && [ "$node_major" -ge 18 ] && command -v npm >/dev/null; then
+  ok "node $(node --version) + npm (builds the app frontend)"
+else
+  bad "Node.js >= 18 with npm is required to build the app frontend - brew install node"
+fi
 
 if user=$("$DB" current-user me --profile "$PROFILE" -o json 2>/dev/null \
           | python3 -c 'import json,sys; print(json.load(sys.stdin)["userName"])' 2>/dev/null); then

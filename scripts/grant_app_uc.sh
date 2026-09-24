@@ -11,14 +11,16 @@
 #
 #   ./scripts/grant_app_uc.sh [profile] [app]
 set -uo pipefail
-PROFILE="${1:-fe-vm-lakebase-praneeth}"
+PROFILE="${1:-$(grep -s '^CRFS_PROFILE=' "$(dirname "$0")/../.crfs.vars" | cut -d= -f2- || true)}"
+[ -n "$PROFILE" ] || { echo "usage: $0 <PROFILE>   (databricks auth profiles lists yours)" >&2; exit 2; }
 APP="${2:-${APP:-crfs-watch-next}}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -f "$HERE/.crfs.vars" ]; then
   CRFS_CATALOG=$(grep '^catalog=' "$HERE/.crfs.vars" | cut -d= -f2- || true)
   CRFS_SCHEMA=$(grep '^schema=' "$HERE/.crfs.vars" | cut -d= -f2- || true)
 fi
-CATALOG="${CATALOG:-${CRFS_CATALOG:-serverless_lakebase_praneeth_catalog}}"
+CATALOG="${CATALOG:-${CRFS_CATALOG:-}}"
+[ -n "$CATALOG" ] || { echo "no catalog: set CATALOG=... or run scripts/bootstrap.sh first" >&2; exit 2; }
 SCHEMA="${SCHEMA:-${CRFS_SCHEMA:-crunchyroll_demo}}"
 DB=$(command -v databricks || echo /opt/homebrew/bin/databricks)
 

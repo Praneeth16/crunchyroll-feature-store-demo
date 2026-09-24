@@ -8,7 +8,8 @@
 # workspace until the whole pipeline had run. Re-run this after notebooks 07, 08,
 # 12 and 23 have created their endpoints.
 set -uo pipefail
-PROFILE="${1:-fe-vm-lakebase-praneeth}"
+PROFILE="${1:-$(grep -s '^CRFS_PROFILE=' "$(dirname "$0")/../.crfs.vars" | cut -d= -f2- || true)}"
+[ -n "$PROFILE" ] || { echo "usage: $0 <PROFILE>   (databricks auth profiles lists yours)" >&2; exit 2; }
 APP="${APP:-crfs-watch-next}"
 # crunchyroll-rail-ranker is included: the app's vertical-ranking page cannot render
 # without CAN_QUERY on it, and it is created by notebook 23 rather than by the bundle.

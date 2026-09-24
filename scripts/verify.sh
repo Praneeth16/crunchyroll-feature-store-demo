@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Assert the demo is in a state worth presenting. Read-only.
 set -uo pipefail
-PROFILE="${1:-fe-vm-lakebase-praneeth}"
+PROFILE="${1:-$(grep -s '^CRFS_PROFILE=' "$(dirname "$0")/../.crfs.vars" | cut -d= -f2- || true)}"
+[ -n "$PROFILE" ] || { echo "usage: $0 <PROFILE>   (databricks auth profiles lists yours)" >&2; exit 2; }
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -f "$HERE/.crfs.vars" ]; then
   CRFS_CATALOG=$(grep '^catalog=' "$HERE/.crfs.vars" | cut -d= -f2-)
   CRFS_SCHEMA=$(grep '^schema=' "$HERE/.crfs.vars" | cut -d= -f2-)
   CRFS_STORE=$(grep '^online_store=' "$HERE/.crfs.vars" | cut -d= -f2-)
 fi
-CATALOG="${CATALOG:-${CRFS_CATALOG:-serverless_lakebase_praneeth_catalog}}"
+CATALOG="${CATALOG:-${CRFS_CATALOG:-}}"
+[ -n "$CATALOG" ] || { echo "no catalog: set CATALOG=... or run scripts/bootstrap.sh first" >&2; exit 2; }
 SCHEMA="${SCHEMA:-${CRFS_SCHEMA:-crunchyroll_demo}}"
 STORE="${STORE:-${CRFS_STORE:-crunchyroll-online-store}}"
 DB=$(command -v databricks || echo /opt/homebrew/bin/databricks)
