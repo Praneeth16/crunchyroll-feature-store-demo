@@ -123,10 +123,12 @@ BUNDLE=(--profile "$PROFILE" --target "$TARGET" ${VARFLAGS[@]+"${VARFLAGS[@]}"})
 if want deploy; then
   step "2/8  Validating and deploying the bundle"
   ./scripts/render_dashboard.sh || die "render dashboard"
+  # The app ships a prebuilt frontend (databricks.yml sync.include). Build it BEFORE the
+  # strict validate: on a fresh clone dist/ does not exist, the sync pattern matches
+  # nothing, and --strict turns that warning into a failure.
+  (cd app/frontend && npm ci --no-audit --no-fund && npm run build) || die "frontend build (needs Node 18+)"
   "$DB" bundle validate "${BUNDLE[@]}" --strict >/dev/null || die "bundle validate"
   note "validated"
-  # The app ships a prebuilt frontend (databricks.yml sync.include); build it first.
-  (cd app/frontend && npm ci --no-audit --no-fund && npm run build) || die "frontend build (needs Node 18+)"
   "$DB" bundle deploy "${BUNDLE[@]}" || die "bundle deploy"
   note "jobs, checkpoint volume and dashboard deployed"
 fi

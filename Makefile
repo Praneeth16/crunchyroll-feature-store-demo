@@ -57,14 +57,16 @@ render: ## Render the dashboard template for this workspace
 # check_notebooks.py runs first because it is free and catches what a job charges for: a
 # markdown cell missing its `%md` executes as Python, and that was found 28 minutes into a
 # run whose earlier cells had all passed.
-validate: render ## Lint the notebooks, then strict bundle validation
+# frontend comes first: on a fresh clone dist/ is absent, sync.include matches nothing,
+# and --strict fails on that warning.
+validate: render frontend ## Lint the notebooks, then strict bundle validation
 	python3 scripts/check_notebooks.py
 	$(BUNDLE) validate --strict $(FLAGS)
 
 frontend: ## Build the app's React frontend into app/frontend/dist
 	cd app/frontend && npm ci --no-audit --no-fund && npm run typecheck && npm run build
 
-deploy: validate frontend ## Deploy jobs, volume, dashboard and the app
+deploy: validate ## Deploy jobs, volume, dashboard and the app
 	$(BUNDLE) deploy $(FLAGS)
 
 # The app is a bundle resource now, so `deploy` already created or updated it and
