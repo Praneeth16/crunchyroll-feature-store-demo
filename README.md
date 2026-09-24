@@ -1,8 +1,14 @@
 # Crunchyroll · Shared feature store, two ranking models, one request path
 
 
-60–75 minutes · customer-facing · Databricks Feature Engineering in Unity Catalog +
-Lakebase Online Feature Store + Model Serving + Databricks Apps
+Databricks Feature Engineering in Unity Catalog · Lakebase Online Feature Store ·
+Model Serving · Databricks Apps
+
+> **About this repo.** This is a reference implementation built for the Crunchyroll ML
+> platform team. It runs end to end on **synthetic data**; there is no Crunchyroll data
+> anywhere in it. It is sample code, not an official Databricks product, and it is
+> released under the [Apache-2.0 license](LICENSE). Everything it creates lives in your
+> own workspace, under a catalog and schema you choose.
 
 **Vertical ranking decides which rails go on the homepage. Horizontal ranking decides
 which titles go inside them. They share one feature layer.**
@@ -15,9 +21,25 @@ of a viewer feature. The rail ranker is configured for a request path (no
 scale-to-zero, explicit provisioned concurrency, route optimization) and its
 latency, throughput, autoscaling and spike behaviour are **measured**, not asserted.
 
+## Run it in your workspace
+
 ```bash
-./setup.sh --profile <PROFILE>     # empty workspace to working demo, one command
+# 1. authenticate once (any profile name)
+databricks auth login --host https://<your-workspace> --profile <PROFILE>
+
+# 2. empty workspace to working demo: discovers ids, deploys, trains, serves, verifies
+./setup.sh --profile <PROFILE> --catalog <a catalog you can write to>
+
+# 3. use it, check it, stop paying for it
+make app-url          # the homepage app
+make verify           # read-only assertions that the demo is in a presentable state
+make teardown-cost    # delete endpoints, app and online store; keep the UC data
 ```
+
+About **60–75 minutes** end to end. It asks before creating anything billable. What it
+needs (CLI ≥ 1.17, Node ≥ 18, serverless, Unity Catalog, Lakebase), what it creates and
+what it costs are in **[QUICKSTART.md](QUICKSTART.md)**. After the first run the profile
+is remembered in `.crfs.vars` (gitignored), so later `make` targets need no arguments.
 
 Everything claimed here was run on a live workspace. Measurements come with the
 command that produced them, and anything not yet verified is listed as not yet
@@ -509,9 +531,10 @@ synthetic labels, small online cardinality, no fallback path, no A/B, no streami
 path for rail features — are enumerated with their consequences in
 [docs/vertical_ranking.md § 6](docs/vertical_ranking.md). The list below is the rest.
 
-- **No fallback for the request path.** No cached previous ranking, no editorial
-  default on timeout, no circuit breaker. A production homepage needs all three, and
-  their design affects the latency budget more than the model does.
+- **The fallback is in-process only.** The homepage service has a timeout budget, a
+  circuit breaker and cached → editorial tiers ([docs/homepage_service.md](docs/homepage_service.md)),
+  but the last-good ranking lives in the app's memory. A fleet needs a shared cache, and
+  the budget belongs to the homepage SLO, which only Crunchyroll can set.
 - **The NDCG lift is a statement about the pipeline, not a forecast.** The labels are
   generated from a latent utility the model can recover. Real gains depend on real
   signal, and the honest measurement is an interleaving or bucket test, which this

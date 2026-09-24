@@ -4,9 +4,10 @@ Two paths. The one-command path is what you want the first time; the step-by-ste
 is what you want when something fails, because each step is separately runnable and
 separately checkable.
 
-Nothing here is pinned to the workspace this was built on: the three ids that differ per
-workspace — SQL warehouse, Lakebase database resource, billing endpoint uid — are
-discovered at run time.
+Nothing here is pinned to the workspace this was built on. The workspace comes from your
+CLI profile. The three ids that differ per workspace (SQL warehouse, Lakebase database
+resource, billing endpoint uid) are discovered at run time. Nothing in the repo needs
+editing.
 
 ---
 
@@ -27,13 +28,20 @@ discovered at run time.
 Authenticate and pick a profile — never let a command pick one for you:
 
 ```bash
-databricks auth login --host https://<your-workspace>.cloud.databricks.com --profile <PROFILE>
+databricks auth login --host https://<your-workspace-url> --profile <PROFILE>
 databricks auth profiles          # confirm it is there
 databricks current-user me --profile <PROFILE>
 ```
 
-Every command below takes `PROFILE=<PROFILE>`; the Makefile's default is the workspace
-this was built on, so pass yours.
+Pass `PROFILE=<PROFILE>` the first time. `setup.sh` / `make bootstrap` remember it in
+`.crfs.vars` (gitignored), so later `make` targets can omit it. Nothing falls back to
+the workspace this was built on: without a profile, every target and script stops and
+asks for one.
+
+**Pick the catalog.** Pass `--catalog <name>` to `setup.sh` for a catalog you can create
+schemas in. Omitted, bootstrap picks the first managed catalog you can write to and
+prints it. Everything goes into one schema, `crunchyroll_demo` by default (`--schema`
+changes it).
 
 ---
 
@@ -49,6 +57,22 @@ before creating anything billable. Roughly 60–75 minutes, most of it the two p
 
 Useful flags: `--stage <name>` to run one stage, `--skip-bench`, `--skip-app`,
 `--catalog`, `--schema`, `--yes`.
+
+**What it creates in your workspace**
+
+| | |
+|---|---|
+| Unity Catalog | one schema: events and reference tables, feature tables, UC Python UDFs, three registered models (watch-next ranker, rail ranker, retriever), a checkpoint volume |
+| Lakebase | one Online Feature Store (`crunchyroll-online-store`, `CU_1`) and its published online tables |
+| Model Serving | `crunchyroll-watch-next-ranker`, `crunchyroll-rail-ranker`, `crunchyroll-candidate-retriever`, `crunchyroll-viewer-features` (feature serving) |
+| Jobs | `crfs_end_to_end`, `crfs_vertical`, `crfs_benchmark` and the optional ones (`make help`), all serverless |
+| App + dashboard | the `crfs-watch-next` Databricks App (FastAPI + React) and one AI/BI dashboard |
+
+**What keeps billing after it finishes:** the online store (it cannot scale to zero;
+measured $15.95/day at `CU_2` list price, and the default `CU_1` halves the compute
+floor), plus the three request-path endpoints, which are configured without
+scale-to-zero. `make teardown-cost` removes all of these and keeps the data.
+[cost_and_sizing.md](docs/cost_and_sizing.md) has the measured figures.
 
 ---
 
@@ -76,8 +100,9 @@ as a resource, and that database's id is *generated* when `fe.create_online_stor
 notebook 01 — so it does not exist before the first pipeline run. `make bootstrap` writes
 the real id into `.crfs.vars`, and `./setup.sh` sequences all of this for you. Taking a
 shortcut straight to `make deploy` on a workspace that has never run the pipeline binds
-whatever default `databricks.yml` carries, which is another workspace's database.
-`make preflight` says so explicitly when it cannot resolve the id.
+a placeholder database id, and the app runs on Feature Serving without Postgres until
+bootstrap resolves the real one. `make preflight` says so explicitly when it cannot
+resolve the id.
 
 One more exception: an app that already exists outside the bundle has to be adopted once,
 otherwise deploy tries to create it and gets 409:
