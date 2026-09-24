@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # What this demo is billing. List prices, so read them as an upper bound.
 set -uo pipefail
-PROFILE="${1:-fe-vm-lakebase-praneeth}"
+PROFILE="${1:-$(grep -s '^CRFS_PROFILE=' "$(dirname "$0")/../.crfs.vars" | cut -d= -f2- || true)}"
+[ -n "$PROFILE" ] || { echo "usage: $0 <PROFILE>   (databricks auth profiles lists yours)" >&2; exit 2; }
 DAYS="${DAYS:-14}"
 PROJECT="${PROJECT:-crunchyroll-online-store}"
 BRANCH="${BRANCH:-production}"

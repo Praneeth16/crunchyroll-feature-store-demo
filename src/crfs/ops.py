@@ -56,9 +56,45 @@ def sync_summary(w, full_name: str) -> dict:
     return out
 
 
+# Delta operations that change no data. A sync pipeline never reports "processing"
+# one of these, because there is nothing new to move -- so they must not be used as
+# the commit version an online table is waited on.
+#
+# This is an exclusion list, not an allow-list, on purpose: an operation nobody
+# anticipated is treated as data-changing, so the wait is too strict rather than too
+# loose. Being too loose means reading stale online features and calling them fresh,
+# which is the failure this whole module exists to prevent.
+MAINTENANCE_OPS = (
+    "OPTIMIZE", "VACUUM START", "VACUUM END", "ANALYZE TABLE", "COMPUTE STATISTICS",
+    "SET TBLPROPERTIES", "UNSET TBLPROPERTIES", "REORG TABLE", "CLUSTER BY",
+    "ADD CONSTRAINT", "DROP CONSTRAINT", "REFRESH TABLE",
+)
+
+
 def source_commit_version(spark, source_full_name: str):
-    row = spark.sql(f"DESCRIBE HISTORY {source_full_name} LIMIT 1").first()
-    return None if row is None else int(row["version"])
+    """The latest commit that actually changed data.
+
+    Not simply `DESCRIBE HISTORY LIMIT 1`. Managed UC tables get predictive
+    optimization, so the newest commit is frequently an `OPTIMIZE` -- and a synced
+    table's `last_processed_commit_version` will never reach it, because there is no
+    data in it to process. Anchoring the wait on that version makes
+    `refresh_and_wait` time out on a table that is genuinely current.
+
+    Measured: `viewer_rail_features_ts` at commit 9 (OPTIMIZE) with the sync correctly
+    holding at commit 8 (MERGE) and reporting NO_PENDING_UPDATE. Waiting for 9 could
+    only ever end in the 900s timeout that failed the vertical job.
+
+    Returns None only when the table has no history at all.
+    """
+    rows = spark.sql(f"DESCRIBE HISTORY {source_full_name}").select("version", "operation").collect()
+    if not rows:
+        return None
+    data_rows = [r for r in rows if (r["operation"] or "").upper() not in MAINTENANCE_OPS]
+    if not data_rows:
+        # Nothing but maintenance in the whole history: fall back to the newest commit
+        # rather than returning None, which would silently disable the check.
+        return int(max(int(r["version"]) for r in rows))
+    return int(max(int(r["version"]) for r in data_rows))
 
 
 def wait_for_sync(w, full_name: str, min_commit_version=None, timeout_s=300,

@@ -1,0 +1,171 @@
+<mxfile host="drawio" agent="crfs">
+  <diagram id="e2e" name="End-to-end flow">
+    <mxGraphModel dx="1600" dy="1000" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1080" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="title" value="&lt;b&gt;Crunchyroll homepage ranking on Databricks&lt;/b&gt; — two rankers, one feature store, batch and real-time from the same model" style="text;html=1;fontSize=20;fontColor=#1F2937;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="1400" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="subtitle" value="Solid = data / request path · dashed = control, feedback or demo-only · orange = request path of one homepage view" style="text;html=1;fontSize=12;fontColor=#6B7280;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="58" width="1400" height="22" as="geometry"/>
+        </mxCell>
+
+        <!-- lanes -->
+        <mxCell id="lSrc" value="1 · Sources" style="rounded=1;arcSize=2;whiteSpace=wrap;html=1;fillColor=#F9FAFB;strokeColor=#D1D5DB;dashed=1;verticalAlign=top;align=left;spacingLeft=12;spacingTop=8;fontSize=13;fontStyle=1;fontColor=#6B7280;" vertex="1" parent="1">
+          <mxGeometry x="40" y="100" width="220" height="930" as="geometry"/>
+        </mxCell>
+        <mxCell id="lFE" value="2 · Feature engineering in Unity Catalog" style="rounded=1;arcSize=2;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#BFDBFE;dashed=1;verticalAlign=top;align=left;spacingLeft=12;spacingTop=8;fontSize=13;fontStyle=1;fontColor=#1D4ED8;" vertex="1" parent="1">
+          <mxGeometry x="290" y="100" width="280" height="930" as="geometry"/>
+        </mxCell>
+        <mxCell id="lStore" value="3 · Offline + online store" style="rounded=1;arcSize=2;whiteSpace=wrap;html=1;fillColor=#F5F3FF;strokeColor=#DDD6FE;dashed=1;verticalAlign=top;align=left;spacingLeft=12;spacingTop=8;fontSize=13;fontStyle=1;fontColor=#6D28D9;" vertex="1" parent="1">
+          <mxGeometry x="600" y="100" width="250" height="930" as="geometry"/>
+        </mxCell>
+        <mxCell id="lTrain" value="4 · Train, register, promote" style="rounded=1;arcSize=2;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#A7F3D0;dashed=1;verticalAlign=top;align=left;spacingLeft=12;spacingTop=8;fontSize=13;fontStyle=1;fontColor=#047857;" vertex="1" parent="1">
+          <mxGeometry x="880" y="100" width="260" height="930" as="geometry"/>
+        </mxCell>
+        <mxCell id="lServe" value="5 · Model Serving" style="rounded=1;arcSize=2;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#FED7AA;dashed=1;verticalAlign=top;align=left;spacingLeft=12;spacingTop=8;fontSize=13;fontStyle=1;fontColor=#C2410C;" vertex="1" parent="1">
+          <mxGeometry x="1170" y="100" width="270" height="930" as="geometry"/>
+        </mxCell>
+        <mxCell id="lApp" value="6 · Homepage service (Databricks App)" style="rounded=1;arcSize=2;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#FECACA;dashed=1;verticalAlign=top;align=left;spacingLeft=12;spacingTop=8;fontSize=13;fontStyle=1;fontColor=#B91C1C;" vertex="1" parent="1">
+          <mxGeometry x="1470" y="100" width="390" height="930" as="geometry"/>
+        </mxCell>
+
+        <!-- 1 sources -->
+        <mxCell id="events" value="&lt;b&gt;engagement_events&lt;/b&gt;&lt;br&gt;Delta, CDF on&lt;br&gt;&lt;font color=#6B7280&gt;107k events · impression, play, complete&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9CA3AF;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="60" y="150" width="180" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="producer" value="&lt;b&gt;Event producer&lt;/b&gt;&lt;br&gt;&lt;font color=#6B7280&gt;crfs_streaming (continuous)&lt;br&gt;crfs_event_burst (app button)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9CA3AF;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="60" y="260" width="180" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="catalog" value="&lt;b&gt;titles · rails · entitlements&lt;/b&gt;&lt;br&gt;&lt;font color=#6B7280&gt;132 titles · 16 rails · 300 viewers&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9CA3AF;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="60" y="380" width="180" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="implog" value="&lt;b&gt;Homepage impression log&lt;/b&gt;&lt;br&gt;rail, &lt;u&gt;rendered position&lt;/u&gt;, click&lt;br&gt;&lt;font color=#B91C1C&gt;open item #1: Crunchyroll must log position&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DC2626;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="60" y="490" width="180" height="80" as="geometry"/>
+        </mxCell>
+
+        <!-- 2 feature engineering -->
+        <mxCell id="ftH" value="&lt;b&gt;Shared feature tables&lt;/b&gt;&lt;br&gt;viewer_features · recent_behavior_ts&lt;br&gt;title_features · session_features&lt;br&gt;&lt;font color=#6B7280&gt;read by BOTH rankers&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#3B82F6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="310" y="150" width="240" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="ftV" value="&lt;b&gt;Rail-grain feature tables&lt;/b&gt;&lt;br&gt;rail_features_ts · viewer_rail_features_ts&lt;br&gt;&lt;font color=#6B7280&gt;every lookup as-of (PIT) — V76 leak fix&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#3B82F6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="310" y="260" width="240" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="udf" value="&lt;b&gt;Request-time UC Python UDFs&lt;/b&gt;&lt;br&gt;5 on-demand features, 2 shared&lt;br&gt;&lt;font color=#6B7280&gt;hour, device, recency… resolved in the endpoint&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#3B82F6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="310" y="360" width="240" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="fv" value="&lt;b&gt;Feature Views&lt;/b&gt; (Public Preview)&lt;br&gt;&lt;font color=#6B7280&gt;declared aggregates, no join in training code&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#93C5FD;dashed=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="310" y="460" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="ver" value="&lt;b&gt;Definition versioning&lt;/b&gt;&lt;br&gt;&lt;font color=#6B7280&gt;feature_spec_hash + fingerprint tags;&lt;br&gt;version by name, additively&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#93C5FD;dashed=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="310" y="546" width="240" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- 3 stores -->
+        <mxCell id="offline" value="&lt;b&gt;Offline store&lt;/b&gt;&lt;br&gt;Delta time-series tables&lt;br&gt;&lt;font color=#6B7280&gt;every daily snapshot kept for PIT joins&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=10;fillColor=#EDE9FE;strokeColor=#7C3AED;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="620" y="150" width="210" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="online" value="&lt;b&gt;Lakebase online store&lt;/b&gt;&lt;br&gt;7 published tables, one row per key&lt;br&gt;&lt;font color=#6B7280&gt;TRIGGERED + CONTINUOUS sync&lt;br&gt;cannot scale to zero&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=10;fillColor=#EDE9FE;strokeColor=#7C3AED;fontSize=11;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="620" y="420" width="210" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="batchTbl" value="&lt;b&gt;Batch rail rankings&lt;/b&gt;&lt;br&gt;Delta table&lt;br&gt;&lt;font color=#6B7280&gt;November path (no Lakebase in GCP us-west1)&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=10;fillColor=#FFFFFF;strokeColor=#7C3AED;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="620" y="820" width="210" height="90" as="geometry"/>
+        </mxCell>
+
+        <!-- 4 train -->
+        <mxCell id="ts" value="&lt;b&gt;fe.create_training_set&lt;/b&gt;&lt;br&gt;4 FeatureLookups (as-of) + 5 FeatureFunctions&lt;br&gt;&lt;font color=#6B7280&gt;IPS weights for position bias&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D1FAE5;strokeColor=#10B981;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="900" y="150" width="220" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="trainCpu" value="&lt;b&gt;Train&lt;/b&gt; sklearn (driver)&lt;br&gt;or torch MLP on &lt;b&gt;serverless GPU&lt;/b&gt; (A10)&lt;br&gt;&lt;font color=#6B7280&gt;fe.log_model: feature spec travels with model&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D1FAE5;strokeColor=#10B981;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="900" y="250" width="220" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="uc" value="&lt;b&gt;UC model registry&lt;/b&gt;&lt;br&gt;crunchyroll_rail_ranker · crunchyroll_ranker&lt;br&gt;@champion (v11) · @challenger (GPU)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D1FAE5;strokeColor=#10B981;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="900" y="350" width="220" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="canary" value="&lt;b&gt;Canary gate&lt;/b&gt; (notebook 33, NEW)&lt;br&gt;90/10 split → per-entity error, p95, Spearman&lt;br&gt;&lt;b&gt;PROMOTE&lt;/b&gt; / &lt;b&gt;ROLLBACK&lt;/b&gt; → canary_decisions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;strokeWidth=2;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="900" y="460" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="batchScore" value="&lt;b&gt;fe.score_batch&lt;/b&gt;&lt;br&gt;same @champion, offline features&lt;br&gt;&lt;font color=#6B7280&gt;16/16 rails identical to online&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D1FAE5;strokeColor=#10B981;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="900" y="830" width="220" height="70" as="geometry"/>
+        </mxCell>
+
+        <!-- 5 serving -->
+        <mxCell id="railEp" value="&lt;b&gt;crunchyroll-rail-ranker&lt;/b&gt; (vertical)&lt;br&gt;provisioned 4–32, no scale-to-zero&lt;br&gt;&lt;font color=#6B7280&gt;p50 52 / p95 67 ms · 429 past capacity&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;strokeWidth=2;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="300" width="230" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="retEp" value="&lt;b&gt;crunchyroll-candidate-retriever&lt;/b&gt;&lt;br&gt;viewer embedding · top-60&lt;br&gt;&lt;font color=#6B7280&gt;now always warm (cold start was 42 s)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="400" width="230" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="wnEp" value="&lt;b&gt;crunchyroll-watch-next-ranker&lt;/b&gt; (horizontal)&lt;br&gt;&lt;font color=#6B7280&gt;now always warm&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="500" width="230" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="llm" value="&lt;b&gt;Foundation model&lt;/b&gt;&lt;br&gt;databricks-claude-haiku-4-5&lt;br&gt;&lt;font color=#6B7280&gt;&quot;Why?&quot; — on click only, streamed&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#EA580C;dashed=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="590" width="230" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="inf" value="&lt;b&gt;AI Gateway inference tables&lt;/b&gt;&lt;br&gt;&lt;font color=#6B7280&gt;every request, tagged with its served entity&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=8;fillColor=#FFFFFF;strokeColor=#EA580C;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="690" width="230" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="lookupNote" value="Each endpoint performs its OWN feature lookups against Lakebase and evaluates the UDFs — 7 request fields in, 45 feature values resolved server-side" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#9A3412;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="150" width="230" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="busLbl" value="automatic feature lookup at serving" style="text;html=1;fontSize=10;fontColor=#6D28D9;align=left;" vertex="1" parent="1"><mxGeometry x="900" y="602" width="220" height="18" as="geometry"/></mxCell>
+        <!-- 6 app -->
+        <mxCell id="react" value="&lt;b&gt;React + Tailwind UI&lt;/b&gt;&lt;br&gt;&lt;font color=#6B7280&gt;one POST /api/homepage per view · stale requests aborted&lt;br&gt;waterfall · rails · watch-next · raw rows · fallback · freshness&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DC2626;strokeWidth=2;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1490" y="150" width="350" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="api" value="&lt;b&gt;FastAPI homepage service&lt;/b&gt;&lt;br&gt;asyncio fan-out · HTTP/2 keep-alive · async Postgres pool&lt;br&gt;&lt;font color=#6B7280&gt;Server-Timing per stage&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;strokeWidth=2;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1490" y="300" width="350" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="fallback" value="&lt;b&gt;Fallback (open item #5, NEW)&lt;/b&gt;&lt;br&gt;timeout budget 300 ms · circuit breaker (5 fails / 10 s)&lt;br&gt;rails: model → last good (cached) → editorial&lt;br&gt;titles: model → retrieval order → popularity" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DC2626;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1490" y="420" width="350" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="snap" value="&lt;b&gt;Reference snapshot&lt;/b&gt; (in memory, 5 min refresh)&lt;br&gt;rails · titles · entitlements · eligibility state&lt;br&gt;&lt;font color=#6B7280&gt;zero SQL-warehouse calls on the request path&lt;br&gt;at real scale: a published online feature table&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DC2626;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1490" y="550" width="350" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="wh" value="&lt;b&gt;SQL warehouse&lt;/b&gt;&lt;br&gt;&lt;font color=#6B7280&gt;snapshot + ops footer only&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9CA3AF;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1490" y="690" width="170" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="homeSvc" value="&lt;b&gt;Crunchyroll homepage service&lt;/b&gt;&lt;br&gt;&lt;font color=#6B7280&gt;Nov: read batch table&lt;br&gt;later: call the endpoint (same model)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3F4F6;strokeColor=#6B7280;dashed=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1490" y="830" width="350" height="70" as="geometry"/>
+        </mxCell>
+
+        <!-- edges: data path -->
+        <mxCell id="e1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6B7280;endArrow=block;endFill=1;" edge="1" parent="1" source="producer" target="events"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6B7280;endArrow=block;endFill=1;" edge="1" parent="1" source="events" target="ftH"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6B7280;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.6;" edge="1" parent="1" source="catalog" target="ftV"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="275" y="410"/><mxPoint x="275" y="305"/></Array></mxGeometry></mxCell>
+        <mxCell id="e4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6B7280;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.75;" edge="1" parent="1" source="implog" target="ftV"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="275" y="530"/><mxPoint x="275" y="315"/></Array></mxGeometry></mxCell>
+        <mxCell id="e5" value="write" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6B7280;endArrow=block;endFill=1;fontSize=10;" edge="1" parent="1" source="ftH" target="offline"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6B7280;endArrow=block;endFill=1;" edge="1" parent="1" source="ftV" target="offline"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e7" value="fe.publish_table&lt;br&gt;(sync)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#7C3AED;endArrow=block;endFill=1;fontSize=10;strokeWidth=2;" edge="1" parent="1" source="offline" target="online"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e8" value="PIT join" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#10B981;endArrow=block;endFill=1;fontSize=10;" edge="1" parent="1" source="offline" target="ts"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#10B981;endArrow=block;endFill=1;" edge="1" parent="1" source="ts" target="trainCpu"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#10B981;endArrow=block;endFill=1;" edge="1" parent="1" source="trainCpu" target="uc"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#10B981;endArrow=block;endFill=1;" edge="1" parent="1" source="uc" target="canary"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e12" value="pin version&lt;br&gt;/ route 10%" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#059669;endArrow=block;endFill=1;fontSize=10;exitX=1;exitY=0.25;entryX=0;entryY=0.28;" edge="1" parent="1" source="canary" target="railEp"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1150" y="480"/><mxPoint x="1150" y="320"/></Array></mxGeometry></mxCell>
+        <mxCell id="e13" value="gate metrics" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#059669;dashed=1;endArrow=block;endFill=1;fontSize=10;exitX=0;exitY=0.5;entryX=0.5;entryY=1;" edge="1" parent="1" source="inf" target="canary"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1010" y="725"/></Array></mxGeometry></mxCell>
+        <mxCell id="e15" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#7C3AED;dashed=1;endArrow=block;endFill=1;fontSize=10;startArrow=none;exitX=1;exitY=0.73;entryX=0;entryY=0.5;" edge="1" parent="1" source="online" target="retEp"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="845" y="500"/><mxPoint x="845" y="600"/><mxPoint x="1162" y="600"/><mxPoint x="1162" y="435"/></Array></mxGeometry></mxCell>
+        <mxCell id="e16" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#7C3AED;dashed=1;endArrow=block;endFill=1;exitX=1;exitY=0.73;entryX=0;entryY=0.64;" edge="1" parent="1" source="online" target="railEp"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="845" y="500"/><mxPoint x="845" y="600"/><mxPoint x="1162" y="600"/><mxPoint x="1162" y="345"/></Array></mxGeometry></mxCell>
+        <mxCell id="e17" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#7C3AED;dashed=1;endArrow=block;endFill=1;exitX=1;exitY=0.73;entryX=0;entryY=0.5;" edge="1" parent="1" source="online" target="wnEp"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="845" y="500"/><mxPoint x="845" y="600"/><mxPoint x="1162" y="600"/><mxPoint x="1162" y="528"/></Array></mxGeometry></mxCell>
+        <mxCell id="e18" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#10B981;endArrow=block;endFill=1;" edge="1" parent="1" source="offline" target="batchScore"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="860" y="200"/><mxPoint x="860" y="865"/></Array></mxGeometry></mxCell>
+        <mxCell id="e19" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#10B981;endArrow=block;endFill=1;" edge="1" parent="1" source="batchScore" target="batchTbl"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e20" value="batch path" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6B7280;dashed=1;endArrow=block;endFill=1;fontSize=10;" edge="1" parent="1" source="batchTbl" target="homeSvc"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="725" y="960"/><mxPoint x="1665" y="960"/></Array></mxGeometry></mxCell>
+
+        <!-- request path (orange) -->
+        <mxCell id="r1" value="1 request" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#F47521;strokeWidth=3;endArrow=block;endFill=1;fontSize=10;fontColor=#C2410C;" edge="1" parent="1" source="react" target="api"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="r2" value="∥" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#F47521;strokeWidth=3;endArrow=block;endFill=1;fontSize=12;fontColor=#C2410C;" edge="1" parent="1" source="api" target="railEp"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="r3" value="∥" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#F47521;strokeWidth=3;endArrow=block;endFill=1;fontSize=12;fontColor=#C2410C;" edge="1" parent="1" source="api" target="retEp"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1455" y="350"/><mxPoint x="1455" y="435"/></Array></mxGeometry></mxCell>
+        <mxCell id="r4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#F47521;strokeWidth=3;endArrow=block;endFill=1;" edge="1" parent="1" source="retEp" target="wnEp"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="r5" value="raw rows (display only)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#F47521;strokeWidth=2;dashed=1;endArrow=block;endFill=1;fontSize=10;fontColor=#C2410C;exitX=0.1;exitY=0;entryX=1;entryY=0.25;" edge="1" parent="1" source="api" target="online"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1520" y="238"/><mxPoint x="872" y="238"/><mxPoint x="872" y="445"/></Array></mxGeometry></mxCell>
+        <mxCell id="r6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#DC2626;endArrow=block;endFill=1;" edge="1" parent="1" source="api" target="fallback"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="r7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#DC2626;endArrow=block;endFill=1;" edge="1" parent="1" source="fallback" target="snap"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="r8" value="refresh" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9CA3AF;dashed=1;endArrow=block;endFill=1;fontSize=10;" edge="1" parent="1" source="wh" target="snap"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="r9" value="Why?" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#EA580C;dashed=1;endArrow=block;endFill=1;fontSize=10;" edge="1" parent="1" source="api" target="llm"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1470" y="360"/><mxPoint x="1470" y="620"/></Array></mxGeometry></mxCell>
+        <mxCell id="r10" value="watch 3 episodes (burst job)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9CA3AF;dashed=1;endArrow=block;endFill=1;fontSize=10;" edge="1" parent="1" source="api" target="producer"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1665" y="1000"/><mxPoint x="150" y="1000"/></Array></mxGeometry></mxCell>
+        <mxCell id="r11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6B7280;dashed=1;endArrow=block;endFill=1;" edge="1" parent="1" source="railEp" target="homeSvc"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1440" y="335"/><mxPoint x="1440" y="865"/></Array></mxGeometry></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

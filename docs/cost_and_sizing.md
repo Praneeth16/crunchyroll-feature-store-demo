@@ -18,9 +18,16 @@ the only line in the architecture that bills while nobody is watching.
 | Backing endpoint at `CU_2` | min 8 / max 16 CU |
 | Spend before right-sizing (2026-08-31 → 09-07) | 221.4 DBU ≈ **$115** |
 
-Everything else in the demo scales to zero: the ranker, retriever, feature-serving
-and agent endpoints idle at nothing, and the jobs are serverless and per-run
-(~45 minutes for a full rebuild).
+The feature-serving endpoint scales to zero and the jobs are serverless and per-run
+(~45 minutes for a full rebuild). **The three request-path endpoints do not:** the rail
+ranker never did (provisioned concurrency 4–32), and since 2026-09-23 the watch-next ranker
+and the retriever are `Small` with `scale_to_zero_enabled=false` too, because the homepage
+service calls them inside a 400 ms budget and the retriever's cold start measured **42 s**.
+Both came back with `scale_to_zero_enabled=false` after the 2026-09-24 end-to-end rebuild,
+so the setting survives a fresh deploy.
+That is two always-on Small CPU endpoints the demo did not previously pay for; flip the flag
+in notebooks 03 and 08 (or `serving-endpoints update-config`) for an idle workspace, and
+accept that the first homepage after idle will render its fallback tier.
 
 ## The capacity class governs the endpoint floor
 
@@ -60,8 +67,9 @@ not the class alone, decides where inside the band the endpoint actually sits.
    [streaming_paths.md](streaming_paths.md).
 4. **What goes online at all.** Only serving-critical current values belong there.
    History belongs offline; the online store is not a warehouse.
-5. **Serving endpoints scale to zero.** Leave that on except on demo day, where a
-   cold start on stage costs more than the compute.
+5. **Scale-to-zero is a property of where the endpoint sits, not of the endpoint.** Off-path
+   endpoints (feature serving, an agent) should scale to zero. Anything a user request waits
+   on should not — a cold start is tens of seconds, far outside any homepage budget.
 
 ## What the docs say, verbatim
 

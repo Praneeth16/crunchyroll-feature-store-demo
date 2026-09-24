@@ -10,3 +10,16 @@ app/.venv/
 secrets.env
 .env
 .claude/
+.crfs.vars
+dashboards/generated/
+
+# The standalone deck inlines every image as base64 -- 1.1 MB of it, and the
+# base64 trips secret scanners. Regenerate it from docs/deck/index.html when a
+# single sendable file is needed.
+docs/deck/*_standalone.html
+
+# The app frontend: dependencies and the build are produced where they run.
+node_modules/
+
+# Presenter notes that name people or carry live URLs stay local.
+docs/private/

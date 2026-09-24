@@ -11,21 +11,26 @@ GENRES = ["action", "adventure", "fantasy", "sci_fi", "sports", "drama", "romanc
 
 MATURITY_RANK = {"all": 0, "13+": 1, "16+": 2, "18+": 3}
 
-# Widget name -> default. Defaults match the workspace the demo was built on so
-# every notebook still runs standalone from the workspace UI.
+# Widget name -> default. Jobs always pass every value from the bundle, so these only
+# matter when a notebook is run by hand: set the catalog widget (and warehouse_id for
+# notebook 12) to the values scripts/bootstrap.sh wrote to .crfs.vars.
 DEFAULTS = {
-    "catalog": "serverless_lakebase_praneeth_catalog",
+    "catalog": "main",
     "schema": "crunchyroll_demo",
     "online_store": "crunchyroll-online-store",
     "lakebase_project": "crunchyroll-online-store",
     "lakebase_branch": "production",
     "lakebase_endpoint": "primary",
     "ranker_endpoint": "crunchyroll-watch-next-ranker",
+    # Vertical ranking (rails). Separate endpoint from the horizontal ranker
+    # because the two are sized differently: the rail ranker sits in the homepage
+    # request path and never scales to zero, the watch-next ranker does.
+    "rail_ranker_endpoint": "crunchyroll-rail-ranker",
     "retriever_endpoint": "crunchyroll-candidate-retriever",
     "feature_endpoint": "crunchyroll-viewer-features",
     "agent_endpoint": "crunchyroll-explainer-agent",
     "llm_endpoint": "databricks-claude-sonnet-4-5",
-    "warehouse_id": "4d39ac2e32b72a3a",
+    "warehouse_id": "",
     "end_date": "",          # "" -> yesterday
     "volume": "crfs_ops",
 }
@@ -40,6 +45,7 @@ class Config:
     lakebase_branch: str
     lakebase_endpoint: str
     ranker_endpoint: str
+    rail_ranker_endpoint: str
     retriever_endpoint: str
     feature_endpoint: str
     agent_endpoint: str
@@ -115,6 +121,75 @@ class Config:
         return "\n".join(
             f"  {k:20s} {getattr(self, k)}"
             for k in ("catalog", "schema", "online_store", "ranker_endpoint",
+                      "rail_ranker_endpoint",
                       "retriever_endpoint", "feature_endpoint", "agent_endpoint",
                       "llm_endpoint", "warehouse_id")
         ) + f"\n  {'end_date_resolved':20s} {self.end_date_resolved}"
+
+
+# ---------------------------------------------------------------- feature-table registry
+# Which feature tables each model looks up, as ONE declaration the trainers and the
+# reporting notebook both read.
+#
+# Notebook 24's sharing table used to carry its own hand-typed dict of who-reads-what,
+# while the document claimed the overlap was "resolved from Unity Catalog ... so it
+# cannot drift from reality". Only the table LIST was resolved (`SHOW TABLES LIKE
+# 'online_*'`); the mapping that actually constitutes the sharing claim was typed by
+# hand in a reporting notebook and could disagree with the models silently.
+#
+# These lists mirror the FeatureLookup declarations in notebooks 02 and 22. That is a
+# code declaration, not the deployed model's own feature spec, so it can still drift if
+# someone retrains with different lookups and does not update it -- notebook 24 says
+# which source it used rather than implying more authority than it has.
+# Both rankers read the point-in-time tables, and they read the SAME two viewer tables --
+# which is the sharing claim this repo makes, now checkable rather than asserted. See
+# rails.title_lookups / rails.rail_lookups, which are what the trainers use.
+HORIZONTAL_FEATURE_TABLES = [
+    "viewer_features_ts",
+    "recent_behavior_ts",
+    "title_features_ts",
+]
+# The rail ranker reads the POINT-IN-TIME tables, not the _current ones. That changed when
+# three of its lookups gained a timestamp_lookup_key (verification_log V76): the model's
+# feature spec now names these, so these are what the endpoint resolves online, where each
+# deduplicates to the latest row per key. Keeping the old names here would have made
+# notebook 24 report a shared-table overlap that no longer exists -- the exact drift the
+# notebook's own comment says this list exists to prevent.
+#
+# Must stay in step with rails.rail_lookups(), which is what the trainers actually use.
+VERTICAL_FEATURE_TABLES = [
+    "viewer_features_ts",
+    "recent_behavior_ts",
+    "rail_features_ts",
+    "viewer_rail_features_ts",
+]
+# Published online but read by neither ranker: the retriever's embedding and the
+# streaming freshness path.
+OTHER_ONLINE_READERS = {
+    "viewer_embedding_current": "retriever",
+    "session_features_current": "streaming freshness path",
+}
+
+
+def online_readers() -> dict:
+    """{online_table_name: [reader, ...]} derived from the lookup declarations above.
+
+    Keyed by the PUBLISHED table name, which is the offline name prefixed with
+    `online_` and, for the time series table, shortened -- `viewer_rail_features_ts`
+    publishes to `online_viewer_rail`.
+    """
+    # The published name is the offline name prefixed with online_, with two exceptions:
+    # viewer_rail_features_ts was published under a shortened name before the others
+    # existed, and the _current suffix is dropped.
+    published = {"viewer_rail_features_ts": "online_viewer_rail"}
+    def pub(t):
+        return published.get(t, f"online_{t.replace('_current', '')}")
+
+    out = {}
+    for t in HORIZONTAL_FEATURE_TABLES:
+        out.setdefault(pub(t), []).append("watch-next (horizontal)")
+    for t in VERTICAL_FEATURE_TABLES:
+        out.setdefault(pub(t), []).append("rail ranker (vertical)")
+    for t, reader in OTHER_ONLINE_READERS.items():
+        out.setdefault(pub(t), []).append(reader)
+    return out

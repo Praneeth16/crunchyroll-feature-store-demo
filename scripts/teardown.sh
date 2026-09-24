@@ -12,23 +12,30 @@
 # publish then fails with AlreadyExists while UC shows nothing.
 set -uo pipefail
 
-PROFILE="${1:-fe-vm-lakebase-praneeth}"; shift || true
+PROFILE="${1:-$(grep -s '^CRFS_PROFILE=' "$(dirname "$0")/../.crfs.vars" | cut -d= -f2- || true)}"
+[ -n "$PROFILE" ] || { echo "usage: $0 <PROFILE> [--full] [--yes]   (databricks auth profiles lists yours)" >&2; exit 2; }
+shift || true
 FULL=""; ASSUME_YES=""
 for a in "$@"; do
   [ "$a" = "--full" ] && FULL=1
   [ "$a" = "--yes" ] && ASSUME_YES=1
 done
 
-CATALOG="${CATALOG:-serverless_lakebase_praneeth_catalog}"
-SCHEMA="${SCHEMA:-crunchyroll_demo}"
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+CRFS_CATALOG=$(grep -s '^catalog=' "$HERE/.crfs.vars" | cut -d= -f2- || true)
+CRFS_SCHEMA=$(grep -s '^schema=' "$HERE/.crfs.vars" | cut -d= -f2- || true)
+CATALOG="${CATALOG:-$CRFS_CATALOG}"
+SCHEMA="${SCHEMA:-${CRFS_SCHEMA:-crunchyroll_demo}}"
+[ -n "$CATALOG" ] || { echo "no catalog: set CATALOG=... or run scripts/bootstrap.sh first" >&2; exit 2; }
 STORE="${STORE:-crunchyroll-online-store}"
 APP="${APP:-crfs-watch-next}"
-ENDPOINTS="${ENDPOINTS:-crunchyroll-explainer-agent crunchyroll-viewer-features crunchyroll-candidate-retriever crunchyroll-watch-next-ranker}"
-ONLINE="${ONLINE:-online_viewer_features online_title_features online_recent_behavior online_viewer_embedding online_session_features}"
+# The rail ranker leads: it is the only endpoint without scale-to-zero, so it is
+# the one that is billing right now whether or not anyone is querying it.
+ENDPOINTS="${ENDPOINTS:-crunchyroll-rail-ranker crunchyroll-explainer-agent crunchyroll-viewer-features crunchyroll-candidate-retriever crunchyroll-watch-next-ranker}"
+ONLINE="${ONLINE:-online_viewer_features online_title_features online_recent_behavior online_viewer_embedding online_session_features online_rail_features online_viewer_rail}"
 DB=$(command -v databricks || echo /opt/homebrew/bin/databricks)
 # Resolve the repo root from this script's location. Assuming cwd silently
 # skipped step 4 (dropping synced tables) when run from elsewhere.
-HERE="$(cd "$(dirname "$0")/.." && pwd)"
 
 if [ -z "$ASSUME_YES" ]; then
   echo "About to delete from $CATALOG.$SCHEMA on profile $PROFILE:"

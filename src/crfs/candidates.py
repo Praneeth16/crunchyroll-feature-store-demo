@@ -91,10 +91,12 @@ def query_retriever(w, endpoint: str, viewer_id: str, top_k: int = 60):
 
     preds = list(resp.predictions or [])
     out = preds[0] if preds else []
+    if isinstance(out, dict):
+        # The model returns a single-column DataFrame, so a row arrives as
+        # {"candidates": "<json string>"} -- unwrap the column before decoding.
+        out = out.get("candidates", [])
     if isinstance(out, str):
         out = _json.loads(out)
-    elif isinstance(out, dict):
-        out = out.get("candidates", [])
     return out, elapsed_ms
 
 

@@ -1,7 +1,14 @@
+# Lakeview dashboard files are uploaded verbatim -- DABs does not interpolate
+# ${var.x} inside them (verified 2026-09-16: "invalid dependency "${var.catalog}",
+# no such node"). So the catalog and schema are substituted before the deploy by
+# scripts/render_dashboard.sh, and this points at the generated copy. The tracked
+# file is dashboards/crfs_feature_ops.lvdash.json.tmpl.
 resources:
   dashboards:
     crfs_feature_ops:
-      display_name: Crunchyroll Feature Store - serving, freshness and cost
-      file_path: ../dashboards/crfs_feature_ops.lvdash.json
+      display_name: Crunchyroll shared feature store - vertical ranking, serving and cost
+      file_path: ../dashboards/generated/crfs_feature_ops.lvdash.json
       warehouse_id: ${var.warehouse_id}
-      parent_path: /Workspace/Users/praneeth.paikray@databricks.com
+      # Resolved from the deploying identity rather than pinned to one person, or
+      # every other workspace gets a PERMISSION_DENIED on a path that is not theirs.
+      parent_path: /Workspace/Users/${workspace.current_user.userName}

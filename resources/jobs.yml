@@ -18,6 +18,7 @@ _common: &common_params
   lakebase_branch: ${var.lakebase_branch}
   lakebase_endpoint: ${var.lakebase_endpoint}
   ranker_endpoint: ${var.ranker_endpoint}
+  rail_ranker_endpoint: ${var.rail_ranker_endpoint}
   retriever_endpoint: ${var.retriever_endpoint}
   feature_endpoint: ${var.feature_endpoint}
   agent_endpoint: ${var.agent_endpoint}
@@ -48,14 +49,14 @@ resources:
       tasks:
         - task_key: generate_data
           notebook_task:
-            notebook_path: ../notebooks/00_data_generation.py
+            notebook_path: ../notebooks/00_shared/00_data_generation.py
             base_parameters: *common_params
           timeout_seconds: 2400
 
         - task_key: build_features
           depends_on: [{task_key: generate_data}]
           notebook_task:
-            notebook_path: ../notebooks/01_feature_engineering.py
+            notebook_path: ../notebooks/00_shared/01_feature_engineering.py
             base_parameters: *common_params
           timeout_seconds: 3600
 
@@ -63,14 +64,14 @@ resources:
         - task_key: pit_probe
           depends_on: [{task_key: build_features}]
           notebook_task:
-            notebook_path: ../notebooks/02b_pit_probe.py
+            notebook_path: ../notebooks/10_horizontal/02b_pit_probe.py
             base_parameters: *common_params
           timeout_seconds: 900
 
         - task_key: train_ranker
           depends_on: [{task_key: build_features}]
           notebook_task:
-            notebook_path: ../notebooks/02_train_ranker.py
+            notebook_path: ../notebooks/10_horizontal/02_train_ranker.py
             base_parameters: *common_params
           timeout_seconds: 2400
 
@@ -79,21 +80,21 @@ resources:
         - task_key: train_retriever
           depends_on: [{task_key: build_features}]
           notebook_task:
-            notebook_path: ../notebooks/08_retrieval_ranker.py
+            notebook_path: ../notebooks/10_horizontal/08_retrieval_ranker.py
             base_parameters: *common_params
           timeout_seconds: 3600
 
         - task_key: deploy_ranker
           depends_on: [{task_key: train_ranker}]
           notebook_task:
-            notebook_path: ../notebooks/03_deploy_ranker_endpoint.py
+            notebook_path: ../notebooks/10_horizontal/03_deploy_ranker_endpoint.py
             base_parameters: *common_params
           timeout_seconds: 3600
 
         - task_key: smoke_query
           depends_on: [{task_key: deploy_ranker}]
           notebook_task:
-            notebook_path: ../notebooks/04_query_ranker.py
+            notebook_path: ../notebooks/10_horizontal/04_query_ranker.py
             base_parameters: *common_params
           timeout_seconds: 1800
 
@@ -101,14 +102,14 @@ resources:
         - task_key: ondemand_features
           depends_on: [{task_key: smoke_query}]
           notebook_task:
-            notebook_path: ../notebooks/06_ondemand_features.py
+            notebook_path: ../notebooks/10_horizontal/06_ondemand_features.py
             base_parameters: *common_params
           timeout_seconds: 2400
 
         - task_key: deploy_ranker_v2
           depends_on: [{task_key: ondemand_features}]
           notebook_task:
-            notebook_path: ../notebooks/03_deploy_ranker_endpoint.py
+            notebook_path: ../notebooks/10_horizontal/03_deploy_ranker_endpoint.py
             base_parameters: *common_params
           timeout_seconds: 3600
 
@@ -116,14 +117,14 @@ resources:
         - task_key: feature_serving
           depends_on: [{task_key: ondemand_features}]
           notebook_task:
-            notebook_path: ../notebooks/07_feature_serving.py
+            notebook_path: ../notebooks/10_horizontal/07_feature_serving.py
             base_parameters: *common_params
           timeout_seconds: 3600
 
         - task_key: freshness_triggered
           depends_on: [{task_key: deploy_ranker_v2}]
           notebook_task:
-            notebook_path: ../notebooks/05_freshness_triggered.py
+            notebook_path: ../notebooks/10_horizontal/05_freshness_triggered.py
             base_parameters: *common_params
           timeout_seconds: 2400
 
@@ -133,9 +134,138 @@ resources:
             - {task_key: feature_serving}
             - {task_key: train_retriever}
           notebook_task:
-            notebook_path: ../notebooks/13_ops_and_cost.py
+            notebook_path: ../notebooks/90_ops/13_ops_and_cost.py
             base_parameters: *common_params
           timeout_seconds: 1800
+
+    # ------------------------------------------------------------------ vertical
+    crfs_vertical:
+      name: crfs_vertical
+      description: >-
+        Vertical (rail) ranking on the feature store the horizontal ranker already
+        built: rail catalog and homepage log, two new feature tables published to
+        the same Lakebase store, a propensity-corrected rail ranker, a request-path
+        serving endpoint, and a whole homepage assembled by both models.
+      max_concurrent_runs: 1
+      queue:
+        enabled: true
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
+      tags:
+        demo: crunchyroll-feature-store
+        layer: vertical
+
+      tasks:
+        # Depends on notebook 00 having run: rail impressions are generated against
+        # the same viewers, titles and 90-day window as engagement_events, so the two
+        # logs describe one history rather than two unrelated ones.
+        - task_key: rail_data
+          notebook_task:
+            notebook_path: ../notebooks/20_vertical/20_rail_data_generation.py
+            base_parameters: *common_params
+          timeout_seconds: 2400
+
+        - task_key: rail_features
+          depends_on: [{task_key: rail_data}]
+          notebook_task:
+            notebook_path: ../notebooks/20_vertical/21_rail_features.py
+            base_parameters: *common_params
+          timeout_seconds: 3600
+
+        - task_key: train_rail_ranker
+          depends_on: [{task_key: rail_features}]
+          notebook_task:
+            notebook_path: ../notebooks/20_vertical/22_train_rail_ranker.py
+            base_parameters:
+              <<: *common_params
+              # See the widget comment in the notebook: at 1.0 the point-in-time join
+              # did not finish inside a 60-minute timeout, twice.
+              label_sample_frac: "0.25"
+          # Measured 25-30 min, almost all of it the point-in-time as-of join and the
+          # two collects to pandas. 3600s left too little headroom; the notebook now
+          # prints how long each load took so a slow run is diagnosable rather than
+          # indistinguishable from a hang.
+          timeout_seconds: 5400
+
+        - task_key: deploy_rail_endpoint
+          depends_on: [{task_key: train_rail_ranker}]
+          notebook_task:
+            notebook_path: ../notebooks/20_vertical/23_deploy_rail_endpoint.py
+            base_parameters: *common_params
+          # Route optimization is create-time only, so a first deployment here can
+          # include a delete-and-recreate plus a container build.
+          timeout_seconds: 5400
+
+        # Needs BOTH endpoints, so it is the one task that couples the two jobs.
+        # If crfs_end_to_end has not run, this is the task that says so.
+        - task_key: homepage_assembly
+          depends_on: [{task_key: deploy_rail_endpoint}]
+          notebook_task:
+            notebook_path: ../notebooks/20_vertical/24_homepage_assembly.py
+            base_parameters: *common_params
+          timeout_seconds: 1800
+
+    # Separate job, not a task on the spine: it puts real load on a live endpoint,
+    # takes a few minutes, and should be repeatable on its own after any config
+    # change without rebuilding anything.
+    crfs_benchmark:
+      name: crfs_benchmark
+      description: >-
+        Measure the rail-ranking endpoint under load from inside the workspace
+        region: fanout against candidates per request, a concurrency ramp, ten minutes
+        of sustained load to measure how long autoscaling takes to add capacity, a
+        traffic spike, the same fanout against Feature Serving for attribution, and
+        server-side execution_duration_ms from the inference table.
+      max_concurrent_runs: 1
+      tags:
+        demo: crunchyroll-feature-store
+        layer: ops
+      tasks:
+        - task_key: benchmark
+          notebook_task:
+            notebook_path: ../notebooks/90_ops/25_serving_benchmark.py
+            base_parameters:
+              <<: *common_params
+              bench_ramp_levels: "1,2,4,8,16,32,64"
+              bench_fanout_sizes: "1,4,8,16,32"
+              bench_level_seconds: "12"
+              bench_spike_to: "48"
+              bench_rails_per_request: "12"
+              # Ten minutes at one level. The ramp's 12s levels cannot observe capacity
+              # arriving -- this is the phase that measures it.
+              bench_sustained_seconds: "600"
+              bench_sustained_concurrency: "32"
+              # Supported way to get the run id into a notebook. Reading it from the
+              # command context is blocked on serverless compute.
+              run_id: "{{job.run_id}}"
+          # Raised from 3600: the sustained phase adds ten minutes of wall time on top
+          # of the ramp, spike and both fanout sweeps.
+          timeout_seconds: 5400
+
+    crfs_batch:
+      name: crfs_batch
+      description: >-
+        The batch (offline) scoring path: fe.score_batch against the offline feature
+        store, ranked per viewer, written to a precomputed collection-order table. Needs
+        no online store, which is what makes it deliverable where Lakebase is not yet
+        available. Also compares its output against the live endpoint to show the two
+        agree, and measures what a batch table cannot do -- request-time context.
+      max_concurrent_runs: 1
+      tags:
+        demo: crunchyroll-feature-store
+        layer: batch
+      tasks:
+        - task_key: batch_score
+          notebook_task:
+            notebook_path: ../notebooks/20_vertical/26_batch_scoring.py
+            base_parameters:
+              <<: *common_params
+              batch_mode: "full"
+              batch_device: "tv"
+              batch_hour: "21"
+              batch_output: "rail_rankings_batch"
+          timeout_seconds: 3600
 
     # ---------------------------------------------------------------- satellites
     crfs_streaming:
@@ -159,13 +289,13 @@ resources:
       tasks:
         - task_key: streaming_aggregate
           notebook_task:
-            notebook_path: ../notebooks/10_streaming_continuous.py
+            notebook_path: ../notebooks/40_streaming/10_streaming_continuous.py
             base_parameters: *common_params
           timeout_seconds: 5400
         - task_key: produce_events
           environment_key: zerobus
           notebook_task:
-            notebook_path: ../notebooks/11_event_producer.py
+            notebook_path: ../notebooks/40_streaming/11_event_producer.py
             base_parameters:
               <<: *common_params
               mode: loop
@@ -184,13 +314,31 @@ resources:
       tasks:
         - task_key: burst
           notebook_task:
-            notebook_path: ../notebooks/11_event_producer.py
+            notebook_path: ../notebooks/40_streaming/11_event_producer.py
             base_parameters:
               <<: *common_params
               mode: burst
               n_events: "3"
               viewer_id: v0001
           timeout_seconds: 600
+        # Appending events is not enough on its own. The recent-behaviour tables are
+        # TRIGGERED, so the online rows only move when something recomputes them and
+        # refreshes the syncs -- which is notebook 05's job. Without this task the app's
+        # burst button fires, waits, and correctly reports that nothing changed.
+        #
+        # n_events=0 is recompute-only. With the default of 3 this task appended three MORE
+        # completions on top of the burst task's three, so every click of the app's
+        # "watch 3 episodes now" button logged six while the UI said three.
+        - task_key: recompute_and_refresh
+          depends_on:
+            - task_key: burst
+          notebook_task:
+            notebook_path: ../notebooks/10_horizontal/05_freshness_triggered.py
+            base_parameters:
+              <<: *common_params
+              n_events: "0"
+              viewer_id: v0001
+          timeout_seconds: 900
 
     crfs_agent:
       name: crfs_agent
@@ -204,7 +352,7 @@ resources:
       tasks:
         - task_key: agent
           notebook_task:
-            notebook_path: ../notebooks/12_agent_explain.py
+            notebook_path: ../notebooks/50_agent/12_agent_explain.py
             base_parameters:
               <<: *common_params
               auth_mode: resource
@@ -222,7 +370,7 @@ resources:
       tasks:
         - task_key: teardown
           notebook_task:
-            notebook_path: ../notebooks/99_teardown.py
+            notebook_path: ../notebooks/90_ops/99_teardown.py
             base_parameters:
               <<: *common_params
               cost_only: "true"

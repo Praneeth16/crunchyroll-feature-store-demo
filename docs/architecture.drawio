@@ -1,0 +1,189 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Vertical ranking — batch now, online later" id="crfs-arch">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="t_title" value="Crunchyroll vertical ranking — one feature store, one model, two serving paths" style="text;html=1;fontSize=20;fontStyle=1;align=left;verticalAlign=middle;fontColor=#1B1B1F;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="900" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="t_sub" value="Measured on the reference workspace (AWS us-east-1) · rail ranker @champion" style="text;html=1;fontSize=12;align=left;verticalAlign=middle;fontColor=#5C5F6B;" vertex="1" parent="1">
+          <mxGeometry x="40" y="48" width="900" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- ============ 1. SOURCES ============ -->
+        <mxCell id="g_src" value="Source data (Crunchyroll builds these)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F6F8;strokeColor=#C3C7D1;dashed=1;verticalAlign=top;fontSize=12;fontStyle=1;fontColor=#3D4049;align=left;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="90" width="250" height="290" as="geometry" />
+        </mxCell>
+        <mxCell id="s_events" value="engagement_events&#xa;363k plays / skips / completes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9AA0AE;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="60" y="130" width="210" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s_impr" value="rail_impressions&#xa;363,351 homepage impressions&#xa;WITH RENDERED POSITION" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF4E5;strokeColor=#D9822B;fontSize=11;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="60" y="196" width="210" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="s_cat" value="titles / rails catalog&#xa;132 titles · 16 collections" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9AA0AE;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="60" y="272" width="210" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s_note" value="Without rendered position there is&#xa;no position-bias correction, and no&#xa;vertical ranking at all." style="text;html=1;fontSize=10;fontColor=#8A5A16;align=left;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="60" y="326" width="210" height="46" as="geometry" />
+        </mxCell>
+
+        <!-- ============ 2. FEATURE TABLES ============ -->
+        <mxCell id="g_ft" value="Unity Catalog feature tables — OFFLINE (Delta)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEF3FB;strokeColor=#8FADD8;verticalAlign=top;fontSize=12;fontStyle=1;fontColor=#1F3D6B;align=left;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="330" y="90" width="300" height="400" as="geometry" />
+        </mxCell>
+        <mxCell id="ft_shared" value="SHARED with horizontal ranking — unchanged" style="text;html=1;fontSize=10;fontStyle=1;fontColor=#2C6E49;align=left;" vertex="1" parent="1">
+          <mxGeometry x="345" y="122" width="270" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="ft_viewer" value="viewer_features_current   · viewer" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E7F5EC;strokeColor=#2C6E49;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="345" y="142" width="270" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="ft_recent" value="recent_behavior_current   · viewer" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E7F5EC;strokeColor=#2C6E49;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="345" y="172" width="270" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="ft_session" value="session_features_current   · viewer · CONTINUOUS" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E7F5EC;strokeColor=#2C6E49;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="345" y="202" width="270" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="ft_title" value="title_features   · title → aggregated to collection grain" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E7F5EC;strokeColor=#2C6E49;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="345" y="232" width="270" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="ft_new" value="NEW for vertical ranking — the entire incremental cost" style="text;html=1;fontSize=10;fontStyle=1;fontColor=#B23A48;align=left;" vertex="1" parent="1">
+          <mxGeometry x="345" y="272" width="270" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="ft_rail" value="rail_features   · collection (16 rows)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FCEAEC;strokeColor=#B23A48;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="345" y="292" width="270" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="ft_vr" value="viewer_rail_features_ts   · viewer × collection × ts&#xa;TIME SERIES TABLE — 463,419 daily snapshots" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FCEAEC;strokeColor=#B23A48;fontSize=11;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="345" y="322" width="270" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="ft_udf" value="+ 5 request-time UC Python UDFs&#xa;(2 of them shared with horizontal ranking)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9AA0AE;fontSize=11;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="345" y="378" width="270" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="ft_note" value="One table serves both paths: point-in-time offline,&#xa;latest-per-key online. No _current mirror to keep in sync." style="text;html=1;fontSize=10;fontColor=#1F3D6B;align=left;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="345" y="430" width="270" height="46" as="geometry" />
+        </mxCell>
+
+        <!-- ============ 3. TRAINING + REGISTRY ============ -->
+        <mxCell id="g_train" value="Training &amp; registration" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3EFFA;strokeColor=#A98FD8;verticalAlign=top;fontSize=12;fontStyle=1;fontColor=#4B2E83;align=left;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="670" y="90" width="290" height="290" as="geometry" />
+        </mxCell>
+        <mxCell id="tr_ts" value="fe.create_training_set&#xa;4 FeatureLookups + 5 FeatureFunctions&#xa;point-in-time via timestamp_lookup_key&#xa;81,109 training rows" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#7B5AA6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="690" y="128" width="250" height="66" as="geometry" />
+        </mxCell>
+        <mxCell id="tr_ips" value="IPS position-bias correction&#xa;weights from rail_position_propensity" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF4E5;strokeColor=#D9822B;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="690" y="208" width="250" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="tr_model" value="UC Model Registry&#xa;crunchyroll_rail_ranker  v10  @champion&#xa;NDCG@5 0.7157 vs 0.6791 editorial = +5.39%&#xa;feature spec logged INSIDE the model" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#4B2E83;strokeColor=#4B2E83;fontColor=#FFFFFF;fontSize=11;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="690" y="266" width="250" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="tr_note" value="The spec inside the model is why both paths below&#xa;perform identical lookups. There is no second code path." style="text;html=1;fontSize=10;fontColor=#4B2E83;align=left;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="690" y="348" width="250" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- ============ 4. PHASE 1 BATCH ============ -->
+        <mxCell id="g_p1" value="PHASE 1 — NOVEMBER DELIVERABLE · batch · GCP us-west1 · NO online store" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E7F5EC;strokeColor=#2C6E49;strokeWidth=2;verticalAlign=top;fontSize=12;fontStyle=1;fontColor=#1E5235;align=left;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="90" width="540" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_score" value="fe.score_batch(model_uri, df)&#xa;resolves the SAME 4 tables + 5 UDFs&#xa;against the OFFLINE store" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2C6E49;fontSize=11;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="1020" y="130" width="240" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_out" value="rail_rankings_batch (Delta)&#xa;4,628 rows · 300 viewers · model_version 10&#xa;69.9 s score + 2.9 s write" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2C6E49;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1290" y="130" width="230" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_cdf" value="Change Data Feed → incremental refresh&#xa;rescore only viewers whose features moved&#xa;replaceWhere keeps the rest of the table&#xa;makes a MINUTES cadence feasible" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F7FCF9;strokeColor=#2C6E49;fontSize=11;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="210" width="240" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="p1_note" value="No Lakebase. No endpoint.&#xa;Deliverable today in a region&#xa;where the online store does&#xa;not yet exist." style="text;html=1;fontSize=10;fontColor=#1E5235;align=left;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="1290" y="210" width="230" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ============ 5. PHASE 2 ONLINE ============ -->
+        <mxCell id="g_p2" value="PHASE 2 — END GOAL · real time · when Lakebase reaches us-west1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEF3FB;strokeColor=#1F5FA8;strokeWidth=2;verticalAlign=top;fontSize=12;fontStyle=1;fontColor=#14406F;align=left;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="350" width="540" height="270" as="geometry" />
+        </mxCell>
+        <mxCell id="p2_pub" value="publish_table(...)&#xa;the SAME tables, published online&#xa;time series dedupes to latest per key:&#xa;463,419 → 4,681 rows" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#1F5FA8;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="390" width="240" height="66" as="geometry" />
+        </mxCell>
+        <mxCell id="p2_lb" value="Lakebase online store&#xa;CU_1 · cannot scale to zero&#xa;the one always-on cost" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D9E7F7;strokeColor=#1F5FA8;fontSize=11;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="1290" y="390" width="230" height="66" as="geometry" />
+        </mxCell>
+        <mxCell id="p2_ep" value="crunchyroll-rail-ranker endpoint&#xa;7 request fields in → 45 feature values&#xa;resolved server-side · model scores on 47&#xa;p50 52 ms · p95 67 ms · flat 4→32 collections" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1F5FA8;strokeColor=#1F5FA8;fontColor=#FFFFFF;fontSize=11;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="1020" y="478" width="240" height="76" as="geometry" />
+        </mxCell>
+        <mxCell id="p2_gain" value="What Phase 2 buys&#xa;request-time context moves up to&#xa;12 of 16 collections per viewer —&#xa;personalization a precomputed&#xa;table cannot deliver" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF4E5;strokeColor=#D9822B;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1290" y="478" width="230" height="76" as="geometry" />
+        </mxCell>
+        <mxCell id="p2_note" value="What changes between the phases: one API call, and where features are read from.&#xa;The feature definitions, the training set and the model version do not change." style="text;html=1;fontSize=10;fontStyle=1;fontColor=#14406F;align=left;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="566" width="500" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ============ 6. CONSUMER ============ -->
+        <mxCell id="c_home" value="Crunchyroll homepage service&#xa;reads the precomputed table in Phase 1, calls the endpoint in Phase 2&#xa;NEEDS A FALLBACK ORDER — the endpoint sheds excess load with HTTP 429" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCEAEC;strokeColor=#B23A48;strokeWidth=2;fontSize=11;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="600" y="660" width="440" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- ============ 7. PROOF ============ -->
+        <mxCell id="proof" value="MEASURED: the two paths agree&#xa;Same viewer · same collections · same context · same model version 10&#xa;16 of 16 collections at IDENTICAL rank · Spearman(batch, online) = 1.0 · max |Δp| = 0.0026&#xa;The 0.0026 is the time-decay feature reading a clock seconds apart — it SHOULD differ." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1E5235;strokeColor=#1E5235;fontColor=#FFFFFF;fontSize=12;fontStyle=1;align=left;spacingLeft=14;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="650" width="540" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- ============ EDGES ============ -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6B7280;endArrow=block;" edge="1" parent="1" source="s_events" target="ft_viewer">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D9822B;strokeWidth=2;endArrow=block;" edge="1" parent="1" source="s_impr" target="ft_vr">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6B7280;endArrow=block;" edge="1" parent="1" source="s_cat" target="ft_rail">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" value="declarative lookups" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#7B5AA6;strokeWidth=2;endArrow=block;fontSize=10;" edge="1" parent="1" source="g_ft" target="tr_ts">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#7B5AA6;endArrow=block;" edge="1" parent="1" source="tr_ts" target="tr_ips">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#7B5AA6;endArrow=block;" edge="1" parent="1" source="tr_ips" target="tr_model">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" value="same model version" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#2C6E49;strokeWidth=3;endArrow=block;fontSize=10;fontStyle=1;fontColor=#1E5235;" edge="1" parent="1" source="tr_model" target="p1_score">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" value="same model version" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#1F5FA8;strokeWidth=3;endArrow=block;fontSize=10;fontStyle=1;fontColor=#14406F;" edge="1" parent="1" source="tr_model" target="p2_ep">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#2C6E49;strokeWidth=2;endArrow=block;" edge="1" parent="1" source="p1_score" target="p1_out">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#2C6E49;dashed=1;endArrow=block;" edge="1" parent="1" source="p1_cdf" target="p1_out">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" value="offline read" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#2C6E49;strokeWidth=2;endArrow=block;fontSize=10;" edge="1" parent="1" source="ft_vr" target="p1_score">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" value="publish" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#1F5FA8;strokeWidth=2;endArrow=block;fontSize=10;" edge="1" parent="1" source="ft_udf" target="p2_pub">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#1F5FA8;strokeWidth=2;endArrow=block;" edge="1" parent="1" source="p2_pub" target="p2_lb">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e14" value="keyed reads, in request" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#1F5FA8;strokeWidth=2;endArrow=block;fontSize=10;" edge="1" parent="1" source="p2_lb" target="p2_ep">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e15" value="Phase 1: SELECT" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#2C6E49;strokeWidth=2;endArrow=block;fontSize=10;" edge="1" parent="1" source="p1_out" target="c_home">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e16" value="Phase 2: POST /invocations" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#1F5FA8;strokeWidth=2;endArrow=block;fontSize=10;" edge="1" parent="1" source="p2_ep" target="c_home">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e17" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#1E5235;dashed=1;endArrow=none;" edge="1" parent="1" source="p1_out" target="proof">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e18" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#1E5235;dashed=1;endArrow=none;" edge="1" parent="1" source="p2_ep" target="proof">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -2,21 +2,95 @@
 
 The rule for this repo: **nothing enters the README without a dated entry here.**
 Every row is something that was actually run against
-`fevm-serverless-lakebase-praneeth`, with the command and the real output.
+the reference workspace (AWS us-east-1), with the command and the real output.
+
+## 2026-09-16 — vertical (rail) ranking
+
+Every row below was run against the reference workspace (AWS us-east-1). The first four
+are what the whole vertical architecture rests on; the rest are defects that only a
+live run surfaced.
+
+| # | What | How | Result |
+|---|---|---|---|
+| V1 | **A time series feature table can be published online, and the online copy is deduplicated to latest-per-key** | Isolated probe job: `fe.create_table(primary_keys=["viewer_id","rail_id","ts"], timeseries_columns="ts")` on 16 rows across 4 keys, then `fe.publish_table(publish_mode="TRIGGERED")`, then `GET /api/2.0/database/synced_tables/...` | Sync reached `SYNCED_TABLE_ONLINE_NO_PENDING_UPDATE`. Offline 16 rows → **online 4 rows**, each holding the newest `ts` (2026-09-04, `vr_ctr_30d=0.4` = the 4th snapshot). Synced-table spec: `primary_key_columns=[viewer_id, rail_id]`, `timeseries_key=ts`. **This is why there is no `viewer_rail_current` mirror** — one table serves point-in-time training offline and keyed reads online. |
+| V2 | Two entity keys plus a time series key is accepted | same probe | Accepted. The docs recommend at most two primary key columns for performant lookups; `(viewer_id, rail_id)` + `ts` works and is what the demo uses. Note the kwarg is **plural** `timeseries_columns`. |
+| V3 | `create_feature_spec` accepts `timestamp_lookup_key` | `fe.create_feature_spec(features=[FeatureLookup(..., timestamp_lookup_key="ts")])` | `ok`. A spec **without** a timestamp key against the same table also builds, so both shapes are legal; the demo uses the timestamped one so training and serving share one lookup. |
+| V4 | **Dedup holds at real scale** | notebook 21 assertion on the live pipeline | `offline: 421,290 rows across 4,681 (viewer, rail) keys` → `online: 4,681 rows`. The notebook asserts this rather than printing it, because every serving claim depends on it. Online is 90x smaller than offline. |
+| V5 | The homepage log has the position bias it is supposed to have | notebook 20 exit payload | 363,351 rail impressions over 23,511 sessions, 16 rails. Viewport rate 0.3876, CTR 0.1216. `P(viewport given position)` falls **0.9712 at position 1 to 0.09 at position 16**; max clipped IPS weight 10.0. |
+| V6 | Rail eligibility genuinely varies per viewer | notebook 20 / 21 | State-gated rails carry fewer impressions than always-eligible ones in the 30-day window: `r_watchlist` 4,811 and `r_continue` 7,303 against `r_action` 7,971. The eligible set is not constant, which is what the serving contract has to handle. |
+| V7 | Both online tables re-publish idempotently | notebook 21 exit payload | `online_rail_features` and `online_viewer_rail` both reported `"action": "refreshed"`, each `SYNCED_TABLE_ONLINE_NO_PENDING_UPDATE` at the source commit version. No `AlreadyExists`. |
+| V8 | The one-command setup discovers a workspace it was not written against | `./scripts/bootstrap.sh --profile <PROFILE>` | Resolved CLI 1.14.1, auth, schema, serverless warehouse `<warehouse-id>`, store `AVAILABLE CU_1`, Lakebase endpoint `ACTIVE 4-8 CU`, db resource `...databases/<db-id>`, chat model. Wrote 12 `--var` values to `.crfs.vars`; `bundle validate --strict` passed with them applied. |
+| V15 | **Cold start on a scale-to-zero endpoint, measured** | `src/crfs/loadtest.EndpointClient` from a laptop against `crunchyroll-watch-next-ranker`, which had been idle and reported `deployment_state_message: "Scaled to zero"` | First request **timed out at 30 s**. Immediately after, the same call took **9,847.9 ms**, then settled at **383, 354, 394, 382 ms** warm. So the cold start cost between 10 s and >30 s, against a warm laptop-observed p50 of ~380 ms — a factor of 26 or worse, with no upper bound observed. This is the entire argument for `scale_to_zero_enabled: false` on `crunchyroll-rail-ranker`, and it is why `scripts/verify.sh` fails if that setting is not disabled. The ~380 ms warm figure is laptop-to-region and is **not** the platform's latency; `make bench` measures that from inside the region. |
+| V16 | **Request-time rail eligibility was measured from the wrong clock and the wrong window** | Rendered `rails.ELIGIBLE_RAILS_SQL` for 5 viewers and counted the rows | All 5 returned **16 of 16 rails eligible**, against a homepage log in which `r_continue` (7,303 impressions) and `r_watchlist` (4,811) genuinely carried fewer than the always-eligible rails (7,971). Cause: the serving SQL used a 30-day window measured from `current_timestamp()`, while `generate_rail_impressions` used 7 days measured from the data. With generated history ending 9 days before wall clock, every viewer looked active. Fixed to anchor on `MAX(event_ts)` with `INPROGRESS_DAYS = 7`, matching the generator, and the app's copy of the logic was corrected the same way. After the fix, eligible sets run **14–16 of 16**: 247 of 300 viewers are offered Continue Watching, 53 are not. Worth recording because the demo would have looked entirely correct with this bug in place — the eligible set was simply always full. |
+| V17 | **The point-in-time join is the scaling limit of this training notebook, not the model fit** | `fe.create_training_set(..., timestamp_lookup_key="ts")` over 363,351 labels against the 421,290-row `viewer_rail_features_ts`, then `.load_df().toPandas()` for train and holdout | **Did not finish inside a 60-minute task timeout, on two separate runs** (~57 min elapsed when cancelled the second time, with no error). An as-of join is a range join, and range joins degrade with the product of the two sides. Ruled out first: `permutation_importance(n_jobs=-1)` was suspected and fixed (n_jobs=1, 2 repeats, 8k rows) and the hang persisted, so the importance step was not the cause. Two changes came out of it: a `label_sample_frac` widget defaulting to **0.25** (~91k labels, ~6k holdout sessions — enough for the per-session ranking metrics), sampled by whole homepage session so a session is never split across the boundary; and the point-in-time proof narrowed to 3 viewers **before** the join instead of `orderBy(...).limit(400)` after it, which had made a six-row diagnostic as expensive as the training set. The feature tables and `rail_position_propensity` are still built from the **full** 363k log — the sample only affects what the model is fit on, and the notebook prints both counts so the metrics are never read without that context. The honest production answer, written up in `docs/vertical_ranking.md` § 2, is that `toPandas()` + scikit-learn is the wrong estimator at Crunchyroll's volumes; the join is Spark and scales, so the substitution is Spark ML fed from `load_df()` without the collect, and it touches neither the feature layer nor the serving path. |
+| V18 | **The rail ranker trains, registers to Unity Catalog, and beats the incumbent order** | `crfs_vertical` task `train_rail_ranker`, 25% session sample | 81,000 training rows, 9,449 holdout rows, **511** holdout homepage sessions with >=1 engagement and >=4 viewed rails. Holdout AUC **0.7251** all impressions / **0.6214** viewed only. NDCG@5 **0.7044** for the ranker against **0.6751** for the incumbent editorial order = **+4.3%**; MRR 0.7083 against 0.6770. 44 numeric + 3 categorical features. Registered as version 1, `@champion` alias resolves via `GET /aliases/champion`, tags `ndcg5_lift_vs_editorial=+0.0434`, `position_bias_correction=ips`. **UC registration succeeded on the first recipe** (`explicit input_example`, the one notebook 02 uses) — the `infer_input_example=True` fallback added for notebook 08's known failure was not needed here, most likely because `viewer_id` and `rail_id` are deliberately kept in the training set and `predict()` reads both. |
+| V19 | **Reading aliases off `search_model_versions` results is not supported, and the wrong fix looked right** | `list(v.aliases or [])` in the display-only summary cell | First failure: `TypeError: 'method' object is not iterable`. I inferred from that message that `aliases` was a method and "fixed" it with `al() if callable(al) else al` — which failed the task a **second** time with the real explanation: *"UC Model Versions gathered through search_model_versions do not have aliases. Please use get_model_version to obtain an individual version's aliases."* `ModelVersionSearch.aliases` raises on purpose. The correct call is `mc.get_model_version(name, version).aliases`. Two lessons recorded rather than one: read what the API actually does instead of inferring a fix from an exception type, and **a display-only block should never be able to fail a task** — both failures happened after the model was trained, logged, registered, aliased and tagged, and each one skipped every downstream task for the sake of a print statement. The block is now both correct and wrapped in `try/except`. |
+| V20 | The ablation needed a check, not trust | `ndcg5_lift_vs_baseline` and `ndcg5_lift_vs_baseline_ablated` both logged as `0.04340097763294315` | Identical to full precision, because both are rounded to 4 dp before the division. That is indistinguishable from a bug in which the ablation silently reused the full feature set. Rather than assume it was benign, the notebook now logs **unrounded** NDCG@5 for both models, the **Spearman correlation** between their scores, and a feature-count assertion (44 -> 43 numeric), and prints a warning if the correlation exceeds 0.9999. The ablated lift is only quotable when those pass. |
+| V21 | **The ablation was measuring nothing, and only the sanity check revealed it** | `ndcg5_full_unrounded` / `ndcg5_ablated_unrounded` / `spearman` added to notebook 22 after V20 | `0.704394` and `0.704394`, **Spearman 1.0**, with feature counts correctly showing 44 -> 43. So the ablation ran, dropped the right column, and changed the model's output not at all. Cause: all 13 `rail_features` columns are constant per rail, and with only 16 rails the tree reconstructs rail identity — and therefore the incumbent's ordering — from any of the other twelve. Dropping `rail_editorial_rank` alone removed nothing. The ablation now drops the **entire rail-identity block**, leaving viewer x rail history, request context and the on-demand crosses, which measures the question worth asking: how much of the lift is personalization versus a better fixed order. The model version description and both documents claimed "+4.3% with the incumbent's own ordering removed" and have been corrected. **The lesson is the check, not the bug**: the first symptom (V20) was two identical rounded numbers, which is easy to wave away as coincidence, and it took an unrounded comparison plus a rank correlation to show the test was inert. |
+| V22 | The shared viewer tables contribute almost nothing to *rail* ranking | permutation importance grouped by feature source, notebook 22 | `viewer_rail_features_ts` **0.0514**, `rail_features` **0.0488**, request-time UDFs **0.0257**, request context **0.0005**, shared viewer tables **-0.0024**. Recorded because it cuts against the easy version of the shared-feature-store pitch: on this data, sharing paid off **operationally** (one pipeline, one online store, one always-on capacity bill, no second copy to keep consistent) rather than predictively for this particular model. A viewer's genre affinity matters much more for *which title* than for *which row*. Better to say that than to imply every shared feature earns its place in every model. |
+| V23 | **One display bug cascaded into a broken deployment** | `crfs_vertical` task `deploy_rail_endpoint`, attempts 0 and 1 | Attempt 0: `TypeError: Object of type ServingModelWorkloadType is not JSON serializable` from `json.dumps(ep_cfg)` — **after** the endpoint and its inference table had been created successfully. Attempt 1 (automatic retry): `get_endpoint()` could not read the endpoint back, its bare `except: return None` reported it as absent, so the notebook tried to CREATE again and every one of the four fallback configurations was rejected with `BadRequest: Table in Unity Catalog ..._payload already exists. Please specify a different table prefix.` Net result: no endpoint, an orphaned `cr_rail_inference_payload` owned by nothing, and two failed attempts — all downstream of a print statement. Three fixes: (1) `loadtest._plain()` coerces every SDK enum so the summary is JSON-safe, plus `default=str` at the call site; (2) `get_endpoint()` treats only genuine not-found as absent and re-raises everything else; (3) on the table-prefix collision the notebook checks whether any endpoint owns the prefix and, only if none does, drops the orphan and retries once — announced, because silently deleting captured inference logs is worse than failing. |
+| V24 | Pattern across the day, recorded deliberately | four consecutive task failures in `crfs_vertical` | Every one was **cosmetic or diagnostic code sitting on the critical path**: a psycopg latency probe (V12), an alias print (V19, twice), and a config dump (V23). In each case the notebook's real work had already succeeded and every downstream task was skipped anyway. The fix each time was the same shape — move the measurement off the pipeline, or guard the display. Recorded because it is the single most transferable lesson from building this: in a multi-task job, a print is not free. |
+| V25 | **Any column left in the training set becomes a required input on the served model** | Live query of `crunchyroll-rail-ranker` with the seven legitimate request keys | `BadRequest: Failed to enforce schema ... Error: Model is missing inputs ['rail_position', 'was_viewport', 'sample_weight']`. The signature was otherwise **exactly right**: all 45 looked-up feature columns came back `(optional)`, which is automatic feature lookup working as intended, and the seven request keys `(required)`. The three extras were label-side columns from the impression log — a rendered position, a viewport flag and an IPS weight — that the model has no business asking a caller for. Dropping them from `input_example` was not enough: the schema is derived from the **training set**, not the example. Fixed by adding them to `exclude_columns` and re-attaching them in pandas on `(viewer_id, rail_id, request_epoch_s)`, verified unique across all 363,351 impressions, with `validate="one_to_one"` and an assertion that nothing failed to re-attach. An `assert` now also guards that no label-side column reaches the signature. The general rule, worth stating for anyone building this: **`exclude_columns` is the model's request contract, not a tidiness setting.** |
+| V26 | **Route optimization was rejected on this workspace; the fallback chain is what produced a working endpoint** | notebook 23, four ordered create attempts | The two attempts carrying `route_optimized: true` were rejected; the third (explicit provisioned concurrency, no route optimization) succeeded. Realised config, read back from the API: `scale_to_zero_enabled=False`, `min/max_provisioned_concurrency=4-32`, `workload_size=None` — which **confirms the documented mutual exclusivity of `workload_size` and the provisioned-concurrency pair** — and the AI Gateway inference table enabled at prefix `cr_rail_inference`. Two consequences recorded rather than hidden: route optimization probably needs enabling for the workspace and should be raised with the account team before any latency commitment depends on it; and `scripts/verify.sh` was changed to treat `route_optimized=false` as a **warning** rather than a failure, because a correct, working, non-route-optimized endpoint must not fail a one-command setup. `scale_to_zero_enabled` remains a hard failure — it is the one endpoint property that decides whether this belongs in a request path. |
+| V27 | **The whole lift is personalization: dropping every rail-identity feature costs nothing** | redesigned ablation, notebook 22, model v5 | Ablation drops all 13 `rail_features` columns (44 -> **31** numeric). NDCG@5 goes **0.706453 -> 0.707339** — very slightly *up* — with **Spearman 0.9709** between the two models' scores confirming they genuinely differ this time (contrast V21, where it was 1.0 and the test was inert). Lift vs the incumbent editorial order: **+4.65%** full, **+4.77%** ablated. Sits oddly beside permutation importance, where `rail_features` ranked second (0.0488), and the reconciliation is the useful part: permutation importance is measured against **AUC**, a global metric, while NDCG measures **ordering within one session**. Rail-level features are constant per rail, so they predict how often a rail is engaged with in general but cannot differentiate rails for a particular viewer — within a session every viewer sees the same rail-level priors. Practical consequence for Crunchyroll: **the viewer x rail interaction table is the asset** for vertical ranking; rail-level aggregates are worth having for calibration and cold start but will not move the homepage order. Model v5 also carries the corrected signature (see V25); v4's description was amended in place rather than left claiming a result its ablation never showed. |
+| V28 | **`Error ''` from Model Serving was a scalar-vs-Series bug in the model's own encoder** | live query of `crunchyroll-rail-ranker` v5, then reproduced locally | Endpoint returned `BadRequest: Encountered an unexpected error while evaluating the model. Verify that the input is compatible with the model for inference. Error ''` — **no traceback, no line number, empty message**. Reproduced offline in seconds: `_encode` did `pd.to_numeric(df[c] if c in df else 0, errors="coerce").fillna(0.0)`, and for an absent column that is `pd.to_numeric(0)` = the **int** `0`, so `.fillna()` raises `AttributeError: 'int' object has no attribute 'fillna'`. This matters because **every looked-up feature is `(optional)` in the signature**, so a frame carrying only the seven request keys is a legal input the endpoint can hand over. Fixed by building an explicit `pd.Series(0.0, index=df.index)` (and `"unknown"` for categoricals), in **both** the served `_encode` and the training-time `encode` — they are deliberately mirror images, and divergence would mean fitting on one representation and serving on another. Note the same latent pattern exists in notebook 02's ranker; it has not bitten there because that endpoint always receives every column. |
+| V29 | A pre-log self-test now exercises predict() the way the endpoint will | notebook 22, new cell before `fe.log_model` | Runs the wrapper on six frame shapes — one rail, one viewer with many rails, several viewers batched, all lookups NaN, a non-default index, and **request keys only** (the shape that broke serving) — asserting column names, row count, no NaN probability, and ranks starting at 1. Verified locally that all six pass after the V28 fix, including per-viewer ranks correctly restarting at 1 for a batched two-viewer call. The point: a bug inside `predict()` costs a full train-and-deploy cycle and returns an unactionable empty error, whereas the same bug in this cell is an ordinary Python traceback. |
+| V30 | **ROOT CAUSE of `Error ''`: the training frame's dtypes are the serving contract** | `databricks serving-endpoints logs crunchyroll-rail-ranker rail_ranker-6` | The client-side error was empty and unactionable across five separate attempts. The container log had the whole answer: `Failed to enforce schema ... Error: Incompatible input types for column vr_last_click_epoch_s. Can not safely convert int64 to float64.` `vr_impressions_30d`, `vr_clicks_30d`, `vr_clicks_7d` and `vr_last_click_epoch_s` are **LONG** in `viewer_rail_features_ts`, but the point-in-time join returns NULL wherever a viewer x rail snapshot does not exist yet, pandas widens the column to float64, and the inferred signature therefore said `double (optional)`. At serving the online lookup returns a genuine int64 and MLflow refuses to narrow. Note the signature was otherwise perfect — the viewer and rail lookups never miss, so those columns stayed `long (required)`; only the sparse viewer x rail block was affected, which is why this was invisible until a live request. Fixed by reading the integral columns out of the four lookup tables' Delta schemas and restoring int64 (fill 0, which is semantically correct: no impressions is 0, and `cr_rail_click_recency` already treats epoch 0 as "never clicked"), plus an assertion that fails at **training** time if any integral column is still float in the input example. |
+| V31 | How to actually debug a serving 400 | — | `databricks serving-endpoints logs <endpoint> <served-entity-name>` is the only place the real traceback appears; the SDK client gets `Encountered an unexpected error while evaluating the model. Error ''`. The served-entity name is at `config.served_entities[0].name` (e.g. `rail_ranker-6`), not the endpoint name, and the command 404s if the endpoint has no settled entity — which is what happens while a config update is in progress, so wait for `NOT_UPDATING` first. Recorded because two wrong hypotheses (a missing sklearn dependency, and a scalar-vs-Series bug in the encoder) were chased before reading these logs. The scalar-vs-Series bug in V28 was real and worth fixing, but it was **not** this failure. |
+| V32 | Requesting a rejected create-time feature turned every rerun into an endpoint rebuild | notebook 23 across five runs | `recreate_for_route_optimization` defaulted to **true**, and route optimization is rejected on this workspace, so every run found an existing non-route-optimized endpoint, **deleted it**, and rebuilt from scratch — a container build each time, and the AI Gateway inference table's captured history discarded with it. Changed the default to **false**: route optimization is still requested on every *create* (and the fallback chain drops it when rejected, so it will be used on a workspace that supports it), but an existing endpoint is now updated in place and the mismatch is reported rather than acted on. Rebuilding is opt-in. Recorded because the setting looked like a correctness guarantee and was actually a repeated destructive action. |
+| V33 | `getContext().currentRunId()` is blocked on serverless, and it was only a label | `crfs_benchmark` first run | `Py4JError: py4j.security.Py4JSecurityException: Method public scala.Option com.databricks.backend.common.rpc.CommandContext.currentRunId() is not whitelisted`. It killed the benchmark **before a single measurement**, and the value was used for nothing but tagging the result rows. Fixed by passing `run_id: "{{job.run_id}}"` as a task parameter — the supported route — with a timestamp fallback so the notebook still runs by hand from the workspace UI. **Fifth occurrence of the same pattern in this build** (V12 psycopg probe, V19 alias print twice, V23 config dump, and this): cosmetic or metadata code on the critical path. Every fix has been the same shape — guard it, or move it off the pipeline. |
+| V34 | **The nullable feature block has to be DOUBLE end to end; BIGINT gives an unwinnable choice** | benchmark warmup returned `statuses: [400]`, reproduced with raw HTTP | `viewer_rail_features_ts` is the only lookup in this model that **misses** — a (viewer, rail) pair with no snapshot yet returns NULL. With its count and epoch columns as BIGINT there is no correct option: leave the NULLs and pandas widens the column to float64, so the signature says `double` and serving refuses to narrow the real int64 (V30); fill the NULLs to keep int64 and the signature says `long (required)`, which cannot represent the NULL an actual lookup miss produces. **Both surface as an empty `Error ''`.** Fixed by making every `viewer_rail_features_ts` feature column DOUBLE at the source, so source, signature and serving agree and NULL is representable throughout. Counts as doubles are fine — these are model inputs, not ledger entries. Two consequential follow-ons: `cr_rail_click_recency`'s parameter had to become DOUBLE too, because FeatureFunction type-matches the argument column against the parameter exactly; and the int64 restoration from V30 now deliberately skips this table while still applying to the three lookups that never miss. |
+| V35 | `upsert_feature_table` compared column NAMES, so a type-only change was silently ignored | notebook 21, found while applying V34 | The guard was `set(columns) == set(columns)`, which is identical for a BIGINT -> DOUBLE change, so the function took its merge path and the old types survived. A fix whose entire purpose was to change a column's type would have appeared to apply and then failed again at serving with the same empty error. Now compares `(name, dataType.simpleString())` pairs and prints the added/removed sets. Caught by asking "what would make this fix silently not apply?" before running it, rather than after another 25-minute cycle. |
+| V36 | psycopg is now off the feature-building pipeline entirely | notebook 21, applying the V12 lesson properly | V12 moved a psycopg *latency probe* off the pipeline after a SIGABRT killed a task, but two psycopg entry points remained: `drop_synced_if_exists(..., online_store=store_pg)` on the schema-change path and the same argument threaded through `publish_or_refresh`. Both are legacy safety nets — `delete_online_table` removes the table from **both** Unity Catalog and the database, as its own docstring in `src/crfs/ops.py` says, so the Postgres cleanup only matters for tables published before that API existed. The schema change in V34 would have exercised exactly that path. Both arguments dropped, the `psycopg[binary]` install removed from the notebook, and the `store_pg` handle deleted so nobody reintroduces a connection here. Notebook 21 now touches no Postgres connection at all; all online-store measurement lives in notebook 25, which runs as its own job. |
+| V37 | **A source edit that silently failed to apply, and a report based on it** | `information_schema.columns` after the rebuild task reported SUCCESS | The four `viewer_rail_features_ts` count/epoch columns were **still LONG**. Two compounding mistakes, both mine. First, the `rails.py` patch asserted on a text block that differed by one word ("the training row" vs "a training row"); the assertion correctly failed, I misattributed it to the *next* block in the same script, patched that instead, and proceeded as though the DOUBLE change had landed — then stated it had. Second, notebook 21's type-aware schema comparison (V35) was patched **after** the rebuild run was already launched, so even a correct source change would have taken the merge path and been cast back to LONG. Fixes: the casts applied by targeting the four lines individually and **verified against the rendered SQL** rather than trusting a replace, plus an assertion in notebook 21 that every viewer_rail feature column is DOUBLE — so an unapplied source edit fails at build time instead of becoming an empty `Error ''` two tasks and twenty minutes later. The transferable lesson is about verification, not types: **a string replace that prints success is not evidence the change is in the file, and a task that reports SUCCESS is not evidence it did what you intended.** Check the artifact.
+| V38 | **Permutation-importance ordering is not stable, and I had built a claim on it** | two runs of notebook 22 on identically-trained models (v7, v8) | `viewer_rail_features_ts` / `rail_features` came back **0.0514 / 0.0488** in one run and **0.0419 / 0.0465** in the next — the top two **swap**. `n_repeats=2` on 8,000 rows (reduced in V-earlier to stop a hang) is simply not enough to rank two similar contributors. I had written "the viewer x rail interaction table is the asset" partly on that ordering; the claim survives because the **ablation** independently shows dropping all rail-identity features costs nothing, but the importance table was weaker evidence than I presented it as. Both documents now show both runs side by side and say explicitly which conclusions are stable (the two new tables dominate; shared viewer tables ~0 for rail ranking, either sign) and which are not (their relative order). Lesson: a metric that was down-sampled for speed must not then be used for fine-grained ranking claims. |
+| V39 | **`verify.sh` never ran the rail-ranker endpoint checks, and printed green anyway** | `make verify`, the first full run after the vertical path was added | The block was `python3 -c '...'` and contained f-strings like `f"endpoint {d.get('name')}"`. Those inner single quotes **terminate the shell's own single-quoted string**, so the shell handed Python the source `d.get(name)` and every run died with `NameError: name 'name' is not defined` — after which `|| fail=1` fired but the six assertions inside (READY, `scale_to_zero=false`, provisioned concurrency, inference table) had produced no output at all. Three lines had the same defect. The failure looked like an unrelated data problem because the two *genuine* FAILs above it (a 9-day data-clock drift and a missing retriever endpoint) drew the eye. Rewritten as a quoted heredoc reading the endpoint JSON from a temp file, which has no quoting hazard, and a served-model-version assertion added so a stale endpoint pinned to an old version cannot pass merely by being READY. Lesson: **a verifier that errors is not a verifier that passes, and a script that mixes shell quoting with Python string literals will eventually hand you neither.** |
+| V40 | The laptop benchmark called a client-side TLS handshake a container cold start | `make bench-local` output, read against the endpoint config it had just printed itself | The note fired on `first_ms > 3 x last_ms` and said the gap "is a cold start, which is what scale_to_zero buys you" — on an endpoint whose own config summary, three lines above, reported `scale_to_zero: false`. It cannot be a container cold start; there is nothing to start. It is TLS negotiation plus the SDK's first OAuth token fetch, one-time per process and entirely client-side. Quoting it as a cold start would have overstated the platform's cold-start cost by about **one second** in front of the customer. Now gated on the actual `scale_to_zero` value from the config and worded to match whichever cause applies. A second defect in the same output: "the smallest p50 seen was N ms **for a 1-rail request**" was hardcoded, while the minimum in that run came from the **16-rail** request — at 375 ms of transport the per-rail cost is inside the noise. Now reports the size the minimum actually came from. |
+| V41 | Two documents held stale values that were true when written | audit against the live workspace while cross-checking the customer ask | (a) `risks.md` said the `recreate_for_route_optimization` widget defaults to `true`; V32 had changed it to **`false`** and the doc was never updated — so the risk section described a destructive default that no longer exists. (b) The §0 architecture diagram labelled the rail endpoint "route optimized"; the realised config is `route_optimized=false` (V26), which §4 of the same document already stated correctly. (c) The laptop-vs-region gap was carried as an *estimate* of "200-250 ms"; measured, it is **320-340 ms**. All three corrected against the API rather than against memory. Lesson: a claim that was measured once decays; the ones that decay silently are the ones a later fix invalidated somewhere else in the repo. |
+| V42 | A model-registry tag I was about to quote from inference held a different quantity | `GET /api/2.0/mlflow/unity-catalog/registered-models/alias` while documenting version management | Writing up model/version management I filled `ndcg5_lift_vs_editorial` as `+0.0314` — the absolute NDCG@5 delta (0.7065 - 0.6751), which is what the tag name suggests. The registry actually holds **`+0.0465`**, the *relative* lift (+4.65%). Same underlying result, different quantity, and the doc would have misreported what the registry says about the model in production. Read the tag instead of deriving it. Also recorded because the UC tables-style API (`/api/2.1/unity-catalog/models/<name>/versions/8`) returns **`aliases: null`** even when `@champion` is set — only the MLflow UC alias endpoint resolves it. Checking the wrong endpoint is an easy way to conclude a promotion silently failed when it did not. |
+| V43 | The retriever's UC registration had a known resolution that was never wired into the notebook it resolved | reading `notebooks/22` and `notebooks/08` side by side while re-running the horizontal path | Notebook 22's own comment says `infer_input_example=True` is "what docs/verification_log.md records as the resolution after notebook 08's retriever failed six times" — and notebook 08 only ever tried the *other* recipe, an explicit `input_example`. The resolution was found, written down in two places, applied to the model that came later, and never applied to the model it was found on; `08` kept reporting `retriever_registered: false` and skipping its endpoint on every run since. Notebook 08 now runs the same two-recipe attempt loop, though it still does not raise when both fail: the SVD, the published embedding table, its online mirror and the recall metrics (0.9948 vs 0.6550 popularity) are all independent of registration. Lesson: **a fix recorded in a log is not a fix applied to the code, and the notebook that carries the workaround is evidence that the notebook that needed it was never revisited.** |
+| V44 | Fixing a documented latent bug revealed the documentation had undercounted it by half | `notebooks/10_horizontal/02_train_ranker.py`, applying the V28-V30 fix that risks.md #17 had described but deferred | risks.md #17 said the watch-next ranker carried the same scalar-vs-Series encoder defect as the rail ranker, described the **numeric** branch, and deferred the fix as out of scope. Two things turned out to be wrong about that entry. First, the deferral's stated reason — not wanting to rebuild and redeploy a working horizontal path — **stopped applying** once that path was being rebuilt anyway for a data-clock drift, so the fix went in. Second, and more useful: the **categorical** branch has the identical defect, `(df[c] if c in df else "unknown").astype(str)`, where the fallback is a bare `str` with no `.astype` — `AttributeError: 'str' object has no attribute 'astype'`, surfacing as the same information-free `Error ''`. Four defective sites across two functions, not two. The entry had been written by reading the code rather than running it. Lesson: **a write-up of a latent bug is itself unverified work** — and a risk deferred for a reason should be re-examined when the reason expires, not carried forward as settled. |
+| V45 | **The vertical job failed on a sync that had already succeeded** — an intermittent wait bug that had been passing by luck | `crfs_vertical` run 84276242896369, `rail_features`: `TimeoutError: online_viewer_rail: no new sync completed within 900s` | The synced table was healthy the whole time: `SYNCED_TABLE_ONLINE_NO_PENDING_UPDATE`, creation succeeded, `last_processed_commit_version=8`. Two defects combined into a guaranteed failure. **(a)** `source_commit_version()` was `DESCRIBE HISTORY LIMIT 1`, and the source's newest commit was **version 9, an `OPTIMIZE`** — predictive optimization on a managed UC table. A sync pipeline never reports processing a commit that contains no data, so `processed >= min_commit_version` (8 >= 9) can never be satisfied. **(b)** On the first-publish path `refresh_and_wait(trigger=False)` samples `sync_end` *after* `publish_table` has already kicked the creation sync, so when creation finishes first `end == before` forever. Either alone is intermittent — which is why earlier runs passed with commit 7 also being an OPTIMIZE — and together they are deterministic. Fixed by resolving the source version to the latest **data-changing** commit, using an **exclusion** list of maintenance operations (OPTIMIZE, VACUUM, ANALYZE, SET TBLPROPERTIES, ...) so an unanticipated operation is treated as data-changing and the wait stays too strict rather than too loose — too loose means serving stale features and calling them fresh. Lesson: **a test that passes intermittently is worse than one that fails, and 'latest Delta version' is not the same question as 'latest version a sync can reach'.** |
+| V46 | An independent review found 9 real defects in code that had already passed a live end-to-end run | `/code-review` over the working tree, every finding then reproduced before being fixed | Worth recording as a whole rather than nine entries, because the pattern is the point: **every one of them sat in a path a green pipeline run does not exercise.** Three copies of the same arithmetic error (`app.py`, notebooks 23 and 24) subtracted a catalog-wide `editorial_rank` from a `rail_rank` that is dense over *eligible* rails only, so each ineligible rail silently credited every rail below it with a free position gained — the customer-facing "N of 15 rails moved up" was inflated, and the caption "a column of zeros would mean the model agrees with the old homepage" was unachievable by construction. Notebook 25 printed `not paying that serial cost` exactly when the measurement said it **was** (inverted comparison). `benchmark_local.py` gated on `.endswith("READY")`, which is **true for `NOT_READY`**, so the guard against benchmarking a cold endpoint never fired. Notebook 22's ablation sanity check compared against `len(NUMERIC) - 1` left over from the abandoned single-feature ablation, so every healthy run printed `UNEXPECTED`. Two shell defects were confirmed by running the pattern in isolation rather than by reading it: `grep ... \| cut ... \|\| echo default` never falls back, because `\|\|` tests the pipeline's status and `cut` succeeds on empty input (`make bench-pull` on a fresh clone built `dbfs:/Volumes///...`); and under `set -euo pipefail` a `.crfs.vars` with no `catalog=` line aborts `render_dashboard.sh` before its own defaults are reached, failing `make deploy` instead of degrading. Plus a `KeyError` in the app when the first of four context calls returns empty and a later one does not. Lesson: **a pipeline that runs green proves the happy path and nothing else.** Every defect here lived in a fallback, an error branch, a display string or a fresh-clone path — none of which a successful run visits. |
+| V47 | **The app's whole Delta-backed surface was blank, and three separate layers each hid the reason** | opening the rendered page for the first time, after access was granted | The vertical panel said *"No rail catalog yet — run `make vertical`"* while `rails` held 16 rows, and the funnel said `Entitled: 0` against 39,600 entitlement rows. Three defects stacked. **(1) The cause:** the app's service principal had **no Unity Catalog grants at all** — absent from the catalog's grant list. `deploy_app.sh` granted Postgres (`grant_app_postgres.sh`) and endpoint CAN_QUERY (`grant_app_endpoints.sh`), and nothing ever granted UC, so every `statement_execution` call against a Delta table was refused. **(2) The mask:** `_sql()` returned an empty DataFrame whenever `res.result` was absent, conflating *zero rows*, *still RUNNING after the 30s wait_timeout*, and *FAILED* — so a permission error rendered as missing data, and the page blamed the pipeline for an access problem. **(3) The second mask:** the handler printed `f"unavailable ({type(e).__name__})"`, naming the exception class and discarding the message. Fixes: new `scripts/grant_app_uc.sh` granting USE_CATALOG / USE_SCHEMA / SELECT, wired into `make deploy-app`, granting at **schema** level because the pipeline's `CREATE OR REPLACE TABLE` replaces the securable and would discard table-level grants on every rebuild; `_sql` now polls and raises with the real error; both handlers print the reason. After the grant alone, `Entitled: 0` became `Entitled: 60`. Lesson: **an empty panel is not evidence of empty data, and every layer that turns a specific failure into a generic one costs the next person the whole diagnosis.** |
+| V48 | Three `st.dataframe(..., width="stretch")` calls failed on the pinned Streamlit | the rendered page: `sync state unavailable: 'str' object cannot be interpreted as an integer`, twice | `width="stretch"` needs Streamlit >= 1.44; `app/requirements.txt` pins **1.40.0**, where `width` must be an int. The Sync lag and Spend panels raised on every render, and a third call in the freshness region was invisible because it only runs after the burst button is clicked. The rest of the file already used `use_container_width=True`, which works on the pinned version — so the file mixed two APIs and only one of them was compatible. Recorded because no amount of reading the pipeline would have found this: it needed the page open. |
+| V49 | **My own fix for V47 broke every query in the app** — and it was the third instance of the same enum mistake in one session | the improved error message immediately reporting `RuntimeError: StatementState.SUCCEEDED: StatementState.SUCCEEDED` | Having just made `_sql` raise on a non-success state, I compared `str(res.status.state) != "SUCCEEDED"`. `str(StatementState.SUCCEEDED)` is **`"StatementState.SUCCEEDED"`**, so the comparison was true on success and every query raised. The only reason it was caught in one cycle is that the same change also made the app print the reason. Notable because this is the **third** appearance of enum-repr-vs-value in this codebase: `loadtest._plain()` exists for it, notebook 23's readiness poll was fixed for it earlier in this same session, and I then wrote it again. Fixed with an explicit `getattr(raw, "value", raw)` helper and verified against a stand-in enum before redeploying. Lesson: **knowing a trap is not the same as having a guard against it** — the guard has to be the thing you reach for by default, or you will reproduce the bug you just fixed. |
+| V50 | **The reported throughput ceiling was half the evidence, and the half that flattered the platform** | `crfs_serving_benchmark`, querying `phase='ramp'` across runs instead of reading the generated report | The earlier run persisted **two** ramp sweeps ten minutes apart, and I quoted only the second. Sweep at 01:31 plateaued at **70-92 req/s** with p50 degrading to 422 ms by concurrency 32; sweep at 01:41, same endpoint and same config, plateaued at **212-216 req/s** with p50 86 ms at concurrency 32. I reported "~212 req/s ceiling, reached at concurrency 16" without noticing the first sweep existed — a 2.6x overstatement of what a freshly-updated endpoint delivers. The newest run reproduces the effect inside a single run: its ramp plateaus at 80 req/s and the spike phase that follows, after the ramp has warmed the endpoint, serves 206 req/s at concurrency 48. Corrected to report both halves and the mechanism: **`min_provisioned_concurrency` is what you get immediately, `max` is what you get several minutes later.** This strengthens rather than weakens the existing conclusion (provision the floor for peak) — scale-up takes minutes, not seconds. Lesson: **when a table has more rows than you expect, find out why before quoting any of them.** Two sweeps in one `run_id` was a task retry, and both attempts persisted. |
+| V51 | Server-side latency attribution had never once been measured, while two documents said it was | `server_side_json` in the persisted benchmark rows: `{"error": "UNRESOLVED_COLUMN ... timestamp_ms"}` | `INFERENCE_LATENCY_SQL` selected `execution_time_ms` and filtered on `timestamp_ms`. The AI Gateway inference table (`cr_rail_inference_payload`) has **neither**: the real columns are `request_time TIMESTAMP` and `execution_duration_ms LONG`. Every run stored an AnalysisException where a measurement should have been, the field was never read, and the docs stated that "client wall time minus `execution_time_ms` ... is printed rather than inferred" — describing an attribution that had never happened. Fixed against the verified schema; first real reading over the benchmark window is **11,911 requests, p50 98 ms, p95 403 ms, p99 570 ms, zero non-200**. Recorded with an explicit warning in the doc that this number **cannot** be differenced against the concurrency-1 client latency, because the window spans concurrency 1-64 plus a 48-way spike and is therefore dominated by requests made under load — which is why the server-side p50 (98 ms) is *higher* than the client p50 at concurrency 1 (52 ms). Lesson: **a captured error in a data column is not a gap in the data, it is a broken query nobody looked at.** |
+| V52 | **I deleted three sections of the customer document with an anchored replacement** | `grep '^###'` after rewriting the metrics block, while updating version references | Rewriting the ranking-metrics section, I replaced everything between "Measured, on 511 holdout sessions" and "### `exclude_columns` is the request contract". The Model-and-version-management section, the Deployment section and the **`## 3 · Online inference` header** all sat between those two anchors — added earlier in the same session precisely because the ask names them — and all three were destroyed. Caught within minutes only because the follow-up edit to update `version 8` to `version 9` failed its assertion and I went looking for the table instead of assuming the file was fine. Restored and updated to v9. Lesson: **an index-based replacement spanning two anchors silently owns everything in between**; the assertion that saved this was on the *next* edit, not on the destructive one. Verify structure after a range replace, not just content. |
+| V53 | The rerun reproduced every headline conclusion on independently regenerated data | model version 9 vs version 8, full pipeline rebuilt from `00_data_generation` | Recorded because reproduction is evidence and single runs are not. NDCG@5 **0.7140 vs 0.6791** incumbent (**+5.1%**) against the earlier 0.7065 vs 0.6751 (+4.7%); AUC-viewed 0.6347 vs 0.6228; 537 holdout sessions vs 511. The ablation dropping all 13 rail-identity features again loses **nothing** — 0.7140 to 0.7169, slightly up, Spearman 0.9755 (previously 0.7065 to 0.7073, Spearman 0.971). Same direction, same magnitude, different data. One number did move: `n_features` is **47**, not the 45 stated throughout the documents and the app, so those were corrected. Permutation importance gave a third data point in which the top two sources separate by nearly 4x, where two earlier runs had them swapping inside the noise — so the docs now show all three runs and say plainly that the *ranking* of those two is not reliably measurable at this sample size, while the ablation conclusion holds across every run. |
+| V54 | **The retriever's UC registration resolved — but my first report of it was wrong, twice over** | `crunchyroll-candidate-retriever` answering a real query with real title IDs; `train_retriever` TERMINATED SUCCESS; `verify passed` | Registration had been carried all project as unresolved. What broke the deadlock was **surfacing the error**: each attempt's exception was printed to stdout only, so `jobs runs get-output` showed a bare `retriever_registered: false`. Putting the exceptions in the exit payload showed both recipes failing identically with `MlflowException: ... a signature that includes only inputs`, which killed the leading hypothesis in one step — switching the return from a numpy `<U` array to a DataFrame produced the *same* error, so output type was never the cause; `fe.log_model` was producing no output spec at all. Resolution is MLflow's documented remedy: log through `fe.log_model` **unregistered** (so the feature spec still travels and the endpoint keeps automatic feature lookup), attach an explicit `ModelSignature` with both inputs and outputs via `set_signature`, then `mlflow.register_model` that URI. **Then I reported it as done and it was not.** I checked the endpoint state (READY) and the model version, saw both green, and never read the task's exit status — the run had FAILED with `Error ''`. Two further defects were behind that, both mine: `predict()` called `json.dumps` while importing only numpy locally, relying on the notebook's module scope that does not exist in the serving container (a `NameError` with no message, which is precisely what `Error ''` renders); and my hand-written signature declared only `viewer_id` and `top_k`, omitting the eight `vf_*` lookup columns — that one would not have crashed, it would have let schema enforcement drop them and scored every viewer against an all-zero embedding, returning confident nonsense. Lesson, and it is the same one as V47 and V51: **a failure you cannot read is a failure you cannot fix** — three blockers here dissolved within minutes of making the error text visible. Second lesson, about me: **endpoint state is not task status, and neither is a query response.** Only the third is evidence the thing works. |
+| V55 | **The same int-width bug I had already fixed and written a rule about, in a second model** | `serving-endpoints logs` on the woken replica, after the endpoint returned `Error ''` for the third time | The real cause of the retriever's serving failure: `MlflowException: Incompatible input types for column top_k. Can not safely convert int64 to int32.` The training frame built `top_k` with `.cast("int")` — int32 — so the derived signature enforced `top_k: integer`, while a JSON request integer arrives as int64 and MLflow refuses to narrow. Model Serving renders this as the information-free `Error ''`, which is why three different root causes all looked identical from outside. **This is V30/V37 again**: an integral width mismatch between the training frame and the request, invisible until a live query, on `vr_last_click_epoch_s` the first time. I had written the rule down then — keep request-carried numerics at their widest type end to end — and did not apply it to the other model. Fixed to `cast("bigint")` with the cross-reference in the comment, and swept the repo for other narrow casts on request-carried columns (the remaining ones are feature-table or label-side, and both rankers answer live). Lesson: **writing a lesson down is not the same as generalizing it**; a rule that lives only in a log entry will be re-learned at full price. |
+| V56 | `verify.sh` certified a non-functional endpoint as passing | the retriever: `READY` in every check while every query to it failed | The script asserted `state.ready == "READY"` and never sent a request, so `verify passed` while the retriever could not answer at all — and I quoted that pass as evidence. Same defect class as V47's `_sql` treating failure as emptiness: a check that cannot distinguish working from broken is worse than no check, because it manufactures confidence. Added a queryability phase that posts a real payload to each request-path endpoint and fails unless the response carries predictions. Both payloads verified live: the rail ranker returns `{engagement_probability, rail_id, rail_rank}`, the retriever returns scored title IDs. Lesson: **assert the behaviour you actually depend on, not the state that usually accompanies it.** |
+| V57 | **Two documented claims about the sharing story did not match the code** | reading `notebooks/20_vertical/21_rail_features.py` and `notebooks/20_vertical/24_homepage_assembly.py` against the doc while auditing the customer ask | Both were in §1, which is the section answering the ask's first and most important bullet. **(a)** The shared-features table listed `title_features` as reaching the vertical ranker "via rail content stats", and notebook 21's own header said it "feeds rail content stats". It does not: notebook 21 reads `spark.table(cfg.t("titles"))` — the **raw** Delta table — and two of the four source columns (`intrinsic_popularity`, `release_year`) exist only there. So title signal is shared at source-data level, not through the feature store, which is materially weaker: those stats inherit none of the feature table's definitions, and `rail_content_age_days` recomputes from `release_year` what `title_features.days_since_release` already defines — two definitions of one concept, the exact drift this architecture argues against. `title_features` has a governed analogue for all four (`popularity_30d`, `avg_rating`, `days_since_release`, `is_simulcast`), so it is a fixable gap; marked **partial** in the alignment doc rather than met. **(b)** The doc said notebook 24 printed the reader overlap "resolved from Unity Catalog … so it cannot drift from reality". Only the table *list* was resolved by `SHOW TABLES`; the reader mapping — which *is* the sharing claim — was a hand-typed dict in the reporting notebook. Now derived from one declaration in `src/crfs/config.py` that mirrors what notebooks 02 and 22 train against, with the notebook printing which source it used, and the doc no longer claiming authority it lacks. Lesson: **the sections making the strongest architectural claims deserve the harshest reading**, because a claim about governance is the easiest kind to assert and the least likely to be checked. |
+| V58 | **I broke a correct number while "correcting" it** | reconciling the feature-count breakdown against `NUMERIC`/`CATEGORICAL` in notebook 22 | Earlier in this session I saw `n_features: 47` in the training output, concluded the documented **45** was stale, and changed it in three files. Both numbers were right and they answer different questions: **45** is the feature values the endpoint *retrieves or computes* (15 viewer + 5 recent-behaviour + 13 rail + 7 viewer×rail + 5 UDF outputs), while **47** is what the model *scores on* — because two retrieved values are deliberately not features (`last_event_epoch_s`, `vr_last_click_epoch_s` are UDF inputs only, leaving 43 used) and four features arrive on the request rather than by lookup (`device`, `locale`, `hour_of_day`, `day_of_week`). 43 + 4 = 47. I substituted one quantity for the other in a sentence specifically about what is resolved **server-side**, which is the training-serving-consistency argument — so the edit damaged the claim it was meant to sharpen. Reverted, and both counts are now reconciled in one place in the document so they cannot be confused again. Lesson: **before correcting a number, establish what question it answers.** A figure that disagrees with a fresh measurement is not necessarily stale; it may be measuring something else. |
+| V59 | **The deliberate autoscaling measurement landed in the wrong place and reported the opposite of what it meant** | new `sustained_phase`, ten minutes at concurrency 32, model v10 | Built to replace V50's accidental finding with a real one, and reported `scale_up_factor 1.0` with `seconds_to_90pct_of_best 0` — flat ~200 req/s from the very first 30-second window. Read literally that says "this endpoint never scales", which contradicts V50. The cause is my own phase ordering: I inserted it as Phase 3b, **after** the spike, so the spike had already driven the endpoint to full capacity and the phase measured an already-scaled endpoint. Two regimes are visible at the *same* concurrency 32 in one run: the ramp gives **77.5 req/s at p50 369 ms with zero 429s** (queuing), while the post-spike sustained phase gives **~200 req/s at p50 71 ms with ~12,000 429s per 30s window** (shedding). Higher throughput *and* lower latency, because rejecting excess beats queuing it. Moved the phase ahead of the ramp so the next run measures capacity arriving rather than capacity already arrived. Lesson: **a phase that measures time-to-X has to be the first thing that happens**, and a metric of 1.0 deserves the same suspicion as a metric that looks too good. |
+| V60 | The batch path works, and batch and online produce the identical ordering | notebook 26, `crfs_batch` job, model v10 | Built because Crunchyroll's November deliverable is batch — Lakebase is unavailable in their region (GCP us-west1) — while real-time is the end goal, so what mattered was how much of the batch work survives the switch. Measured: **4,628 rows across 300 viewers in 69.9 s** (66 rows/s including materialisation), written to `rail_rankings_batch`. The forward-compatibility check scores one viewer both ways and compares: **16 of 16 collections at identical rank, Spearman 1.0, max probability delta 0.0026**. The delta is explained rather than waved at — `cr_rail_click_recency` takes `request_epoch_s`, and the two calls happened seconds apart, so a time-decay feature *should* differ; ranks are unaffected because every collection shifts by the same clock. Also measured what batch cannot do: **up to 9 of 16 collections change position across four contexts**, which is the personalization a precomputed table structurally cannot deliver and the real Phase 2 argument (not latency). Two build notes: `.cache()` is rejected on serverless with `[NOT_SUPPORTED_WITH_SERVERLESS] PERSIST TABLE`, so the lazy frame is forced by writing it — which is the work the job has to do anyway, so the reported rows/s includes the write instead of hiding behind a cached count. And `eligible_rails_all` was added because the existing `eligible_rails` interpolates one viewer id into SQL and returns pandas: right for one homepage, 300 queries at demo scale and millions at theirs. |
+
+### Defects only a live run surfaced
+
+| # | Symptom | Cause | Fix |
+|---|---|---|---|
+| V9 | `KeyError: "'tv'"` at import of `src/crfs/udfs.py` | `_fn()` returns a template that `ddl()` later formats with `.format(fq=...)`. The `cr_device_rail_fit` body contains a dict literal, and `str.format` read it as a replacement field. | `_fn()` now doubles braces in the body and the comment, so any brace-bearing UDF body survives the format pass. Existing bodies contain no braces, so nothing changed for them. |
+| V10 | Four doubled apostrophes in a generated `COMMENT` string | The comment text was hand-escaped *and* `_fn()` escapes apostrophes, so each one was doubled twice. | Write plain apostrophes in comments; `_fn()` owns the escaping. |
+| V11 | Notebook 21 task `INTERNAL_ERROR`, "The Python process exited unexpectedly" | `spark.table("rail_impressions").toPandas()` pulled 363k rows to the serverless driver in order to compute a 16-row aggregate. | `rails.rail_audience()` does the aggregation in Spark SQL and returns 16 rows. The log is never pulled to the driver — which is also the only version of this that survives production cardinality. |
+| V12 | Notebook 21 `exit code 134 (SIGABRT: Aborted)` **after** the feature tables were built, published and asserted | A direct `psycopg` keyed read against the Lakebase endpoint aborted the kernel natively. No `try/except` can contain a SIGABRT, so the task failed and blocked four downstream tasks — for a diagnostic measurement. | The direct online-store read moved to notebook 25, which runs as its own job (`make bench`) and does it **last**, after every result is already persisted. Notebook 21 now does a Spark-side correctness check only. A measurement that can take a 20-minute pipeline down does not belong on the pipeline. |
+| V13 | `make deploy` silently produced no `--var` flags | `setup.sh` used `mapfile`, which does not exist in bash 3.2 — still the system bash on macOS. The bundle fell back to this workspace's hardcoded defaults, which is exactly the failure the one-command setup exists to prevent. | Replaced with a `while IFS= read -r` loop. |
+| V14 | Notebook 25 referenced `viewer_rail_current` | Written before V1 settled the architecture; the mirror table was designed out and the reference was left behind. | Fixed, and `rails.viewer_rail_current_from_ts()` deleted so nobody rebuilds the mirror the design removed. |
 
 ## 2026-09-07 / 2026-09-08
 
 | # | What | How | Result |
 |---|---|---|---|
-| 1 | Online store cost | `system.billing.usage ⨝ list_prices` on `usage_metadata.endpoint_id = ep-wild-dawn-d2ao0nf7` | 30.67 DBU/day at $0.52/DBU = **$15.95/day**, flat Sep 2–6. 221.4 DBU ≈ $115 since Aug 31. |
+| 1 | Online store cost | `system.billing.usage ⨝ list_prices` on `usage_metadata.endpoint_id = <endpoint-uid>` | 30.67 DBU/day at $0.52/DBU = **$15.95/day**, flat Sep 2–6. 221.4 DBU ≈ $115 since Aug 31. |
 | 2 | Capacity class drives the endpoint floor | `PATCH /api/2.0/feature-store/online-stores/...?update_mask=capacity` `{"capacity":"CU_1"}` then `postgres get-endpoint` | `CU_2 → CU_1` moved the endpoint from **min 8 / max 16 CU → min 4 / max 8 CU**. Store stayed `AVAILABLE`; all 3 synced tables stayed `SYNCED_TABLE_ONLINE_NO_PENDING_UPDATE`. |
-| 3 | Lakebase reachable over Postgres | `src/crfs/online.py` + psycopg 3.2.13 from a laptop | Connected as `praneeth.paikray@databricks.com` to db `serverless_lakebase_praneeth_catalog`, schema `crunchyroll_demo`. |
+| 3 | Lakebase reachable over Postgres | `src/crfs/online.py` + psycopg 3.2.13 from a laptop | Connected as the deploying user to db `<catalog>`, schema `crunchyroll_demo`. |
 | 4 | The pooled host rejects OAuth | psycopg against `...-pooler.database.us-east-1...` | `SASL authentication failed` on all three pooler IPs; the direct `status.hosts.host` authenticates with the same token. `online.py` now defaults `pooled=False`. |
 | 5 | Keyed-read latency, laptop | `store.keyed_read_latency("online_viewer_features", "viewer_id", 30 viewers)` | n=30, **p50 240.9 ms, p95 245.5 ms**, min 239.3. Network-dominated — label it as such. |
 | 6 | Example keyed read | `store.keyed_read("online_recent_behavior","viewer_id","v0001")` | `minutes_watched_24h=288.83, skips_24h=1, active_titles_24h=7, last_primary_genre='sci_fi'` in 250 ms. |
 | 7 | The 4 on-demand UDFs exist and behave | `DESCRIBE FUNCTION` + a SELECT exercising every branch | `match_scifi=0.3`, `match_action=0.4`, `cross_pop=0.42` (=0.3×(0.5+0.9)); `hour_near=0.8625`, `hour_far=0.0375`, **`hour_wrap_2h=0.75`** (23:00 vs 01:00 read as 2 hours apart, so the circular distance is right); `decay_10min=0.7165`, `decay_16min=0.5738`, `decay_clamped=0.0`, `decay_null=0.0`, `match_all_null=0.0`. |
 | 8 | UDF bodies must be block-free | `DESCRIBE FUNCTION EXTENDED cr_hour_affinity_delta` | Stored body showed an indented `return` at column 0 → `IndentationError` inside the executor as `UDF_USER_CODE_ERROR`. Rewritten with conditional expressions only. |
-| 9 | Preflight | `./scripts/preflight.sh fe-vm-lakebase-praneeth` | Passed: CLI 1.14.1, auth, schema, warehouse `4d39ac2e32b72a3a`, store `AVAILABLE CU_1`, endpoint `ACTIVE 4-8 CU`, db resource `...databases/db-p78x-mcrka97vph`, LLM `databricks-claude-sonnet-4-5` reachable. |
+| 9 | Preflight | `./scripts/preflight.sh <PROFILE>` | Passed: CLI 1.14.1, auth, schema, warehouse `<warehouse-id>`, store `AVAILABLE CU_1`, endpoint `ACTIVE 4-8 CU`, db resource `...databases/<db-id>`, LLM `databricks-claude-sonnet-4-5` reachable. |
 | 10 | Bundle | `databricks bundle validate --strict -t dev` then `deploy` | Validation OK; deploy created the app and 8 resources. |
 | 11 | Notebook 00 | serverless job run | SUCCESS. `titles=132, viewers=300, entitlements=39600, engagement_events≈107k`, plus an empty `engagement_events_stream` with CDF on. `verify.sh` reports history ending 0 days ago. |
 | 12 | `verify.sh` catches real drift | `./scripts/verify.sh` | Correctly failed on the two things that were genuinely missing at the time (the new viewer columns, and the not-yet-created retriever / feature-serving endpoints). |
@@ -68,7 +142,7 @@ Every row is something that was actually run against
 | 26 | **On-demand features really are computed per request** | three queries, identical stored features, different request context | `hour_affinity` **0.5244** at `hour_of_day=21` vs **0.2335** at `hour_of_day=9`. `session_decay` **0.1629** for a now-request vs **1.0** for a request timestamped 6 h earlier (elapsed goes negative, the guard clamps to 0 minutes, so decay is 1.0 — the documented behaviour, worth knowing before someone reads it as a bug). `affinity_match` stays **0.0601** across all three, correctly, since viewer and title did not change. |
 | 27 | Missing lookup key degrades instead of 500ing | query with `viewer_id='v9999_does_not_exist'` | `minutes_watched_24h: None`, `affinity_match: 0.0`, `session_decay: 0.0`. This is exactly why every UDF guards `None` — an unguarded one raises *inside model serving*. |
 
-| 28 | **Retriever, end to end except its endpoint** | `08` green | recall@60 **0.9948** for SVD vs **0.6550** popularity vs **0.4508** random. `viewer_embedding_current` published; `online_viewer_embedding` reports `SYNCED_TABLE_ONLINE_NO_PENDING_UPDATE`. `retriever_registered: false` — UC registration of the pyfunc is unresolved, the endpoint deployment is skipped, and the notebook says so in its exit payload rather than failing or hiding it. |
+| 28 | **Retriever, end to end including its endpoint** | `08` green; `crunchyroll-candidate-retriever` READY | recall@60 **0.9948** for SVD vs **0.6550** popularity vs **0.4508** random. `viewer_embedding_current` published; `online_viewer_embedding` reports `SYNCED_TABLE_ONLINE_NO_PENDING_UPDATE`. UC registration was unresolved through seven approaches and is now **resolved** — see V54. Registered as v1 and served. |
 | 29 | Event producer | `11` green | `mode=loop`, 2 events/second for 10 minutes, **3,412 rows** in `engagement_events_stream`. |
 
 **Caveat on that recall number, before it reaches a slide:** 0.9948 on 300 synthetic
@@ -126,7 +200,7 @@ path only to clean up tables published before the fix.
 
 | Documented limitation | Why it matters here |
 |---|---|
-| *"An online table's catalog name must match its underlying database name... if they differ, the model serving endpoint fails to deploy."* | Ours match — PG `current_database()` is `serverless_lakebase_praneeth_catalog`, same as the UC catalog. Verified, not assumed. |
+| *"An online table's catalog name must match its underlying database name... if they differ, the model serving endpoint fails to deploy."* | Ours match — PG `current_database()` is `<catalog>`, same as the UC catalog. Verified, not assumed. |
 | *"When a feature table is published to multiple online tables, model serving and feature serving endpoints always resolve to the oldest online table based on the creation timestamp."* | Real risk in this repo, which republishes and recreates tables repeatedly. A stale online table left behind would silently keep serving. Teardown must remove old ones, not just add new. |
 | `filter_condition`, `checkpoint_location`, `mode`, `trigger`, `features` are **unsupported** on `publish_table` | They appear in the signature. We pass none of them. |
 | *"Skipping publishing to online table '...' because the feature sync pipeline is already running."* Only one sync per online table at a time. | Explains why parallel job submissions against the same table were fragile during this build. |
@@ -211,13 +285,81 @@ and the pandas 2.x dtype handling), `00`, `01`, `02`, `02b`, `05`, `10`, `13`, `
 `databricks.yml`, `resources/`, `Makefile`, `deploy_app.sh`, `verify.sh`, and the
 README's numbers against this log.
 
+## 2026-09-18 — pre-demo audit (V61-V66)
+
+Run before the customer readout, against the deployed state rather than against the docs.
+`make verify` passes: 31 assertions, 0 failures, 1 warn (`route_optimized`).
+
+### V61 · Three documents carried v9-era numbers while `@champion` was v10
+
+`ask_alignment.md`, `vertical_ranking.md` and `README.md` quoted model version 9, the v9
+lift (`+0.0514` / +5.1%), the v9 ablation pair (0.7140 -> 0.7169), a superseded spike run
+(p95 383 ms, 5,852 of 11,053 rejected, "zero errors" in recovery) and a stale offline row
+count (421,290). Read from the registry instead of from prose: `@champion` is **10**,
+`ndcg5_lift_vs_baseline` **0.0539**, ablated **0.7161**, Spearman(model, ablated)
+**0.9735**, AUC-viewed **0.6345** on 537 sessions; `viewer_rail_features_ts` holds
+**463,419** rows; the current spike is p50 153 ms / p95 294 ms with **8,770 of 13,988**
+rejected and **4** residual 429s in recovery. All corrected.
+
+The pattern worth keeping: a rerun that improves a number leaves every *other* document
+quoting the number it replaced. The registry is the only trustworthy source for a model's
+own metrics, and it takes one API call to read.
+
+### V62 · Delta CDF `startingVersion` is inclusive, so incremental batch could never work
+
+`make batch-incremental` had never been run. `viewers_with_changed_features` read each
+feature table's change feed from the version the previous run recorded. Verified by query
+rather than by reading docs:
+
+```sql
+SELECT COUNT(*) FROM table_changes('...rail_features', 15)  -- 15 = last scored version
+WHERE _change_type != 'update_preimage'                      -- returns 16
+```
+
+Sixteen rows -- the rows written *by* commit 15, which the previous run already scored. For
+the viewer-grain tables that inflates the rescore set; for `rail_features`, which is
+rail-grain, any change forces a full refresh, so **every incremental run would have fallen
+straight back to a full refresh** while printing that it was incremental. Fixed to read
+from `ver + 1`, with a short-circuit when no commit is newer than the recorded one.
+
+### V63 · An empty changed-viewer list meant "every viewer"
+
+`eligible_rails_all` tested `if viewers:`, which collapses `None` (every viewer) and `[]`
+(no viewer). So an incremental run that found nothing to rescore would print
+`-> incremental: 0 viewers to rescore` and then score the entire population. The write
+path had the same collapse and would have fallen through to a full overwrite. Fixed with
+`if viewers is not None`, an explicit `WHERE 1 = 0` for the empty case, and a write branch
+that leaves the table untouched when nothing moved.
+
+V62 masked V63: the rail-grain full-refresh path fired first, so the truthiness bug was
+never reached. Two defects in the same never-executed code path, each hiding the other.
+
+### V64 · Context movement is a range, not a single number
+
+The docs claimed "up to 9 of 16 collections move" across four contexts. The app computes
+this live and reported **6 / 12 / 9** against the 21:00-on-TV order (09:00 TV, 21:00
+mobile, 09:00 mobile). A direct four-call probe from this laptop, with a different clock
+and day-of-week, gave a worst case of 9. Both are real; the figure depends on which
+context is the baseline. Docs now state **6 to 12 of 16**, and name the baseline.
+
+### V65 · The app's "Sync lag" panel shows permission errors, not sync state
+
+Four rows read `unavailable (User 7430c9b1-... does not have View permissions on pipeline
+...)`. The app's service principal has schema-level UC grants but no `CAN_VIEW` on the
+four synced-table pipelines. Not fixed -- recorded so nobody scrolls onto it live.
+
+### V66 · An unknown `rail_id` returns an empty error
+
+Posting a `rail_id` that is not in `rail_features` fails with
+`Encountered an unexpected error while evaluating the model. ... Error ''` -- the same
+empty-error signature as V54, from a lookup miss rather than a dtype problem. Found by
+inventing plausible-looking rail ids for a probe script. The sixteen real ids are in
+`rails.RAIL_SPECS`; a live demo should read them from the app, never hand-type them.
+
 ## Still to verify
 
 Tracked honestly rather than assumed. Everything above this line was actually run.
 
-- **Retriever endpoint** (`08`): UC registration of the pyfunc is unresolved, so the
-  endpoint is never deployed and the funnel's retrieval hop is unmeasured. The SVD,
-  the published feature table, its online mirror and the recall metrics are all verified.
 - **Agent** (`12`): a real answer quoting real feature values, and which auth path it needed.
 - **The app's rendered UI.** It deploys, starts, and its logs are clean, but nobody has
   opened the page — the six regions, the burst button and the ops footer are unverified
@@ -229,3 +371,655 @@ Tracked honestly rather than assumed. Everything above this line was actually ru
 
 No number from this list appears in the README. When one is measured it goes above, with
 the command that produced it.
+
+## 2026-09-21 — the advanced track and the repo restructure (V67-V74)
+
+Everything in this section was run on the reference workspace (AWS us-east-1)
+against CLI **v1.17.0**, upgraded from v1.14.1 as part of the work.
+
+### V67 · The app can be a bundle resource again — CLI v1.17.0 fixes the update mask
+
+`docs/risks.md` §8b recorded that v1.14.1 put `forward_user_access_token` in every app
+update mask and this workspace's Apps API rejects it, so `bundle deploy` could create an
+app but never update one. Retested on v1.17.0: `Updated apps.crfs_watch_next`, and
+`bundle run crfs_watch_next` deploys the source and restarts the app (deployment
+`SUCCEEDED`, compute `ACTIVE`). `scripts/deploy_app.sh` is deleted.
+
+Three things the retest cost a deploy each to learn:
+
+1. **An app created outside the bundle must be adopted once.** `bundle deploy` otherwise
+   tries to create it: `409 ALREADY_EXISTS`. Fix:
+   `databricks bundle deployment bind crfs_watch_next crfs-watch-next`.
+2. **In a bundle the field is `value_from`, not app.yaml's `valueFrom`.** The camelCase
+   spelling produces `Warning: Use 'value_from' instead of 'valueFrom'` and is then
+   **ignored** — which would leave the app with no warehouse id while looking configured.
+3. **`app.yaml` had to be deleted, not moved.** Databricks Apps does not expand `${NAME}`
+   inside it, which is why the old script rendered a staging copy before upload — and why
+   one earlier deploy shipped without `RAIL_RANKER_ENDPOINT` and the app silently fell
+   back to a previous workspace's endpoint name. Command and env now live only in
+   `resources/app.yml`, which the bundle substitutes.
+
+**Platform gap worth knowing:** `GET /api/2.0/apps/{name}` does not return `config` at
+all, so the environment an app received cannot be read back. Confirmed here by making the
+app print its own env once at startup — every expected variable was present, including
+`DATABRICKS_WAREHOUSE_ID` resolved from the `value_from` resource reference.
+
+### V68 · A hand-built `--var` list is a single argument under zsh
+
+While verifying the app's environment, `DATABRICKS_CATALOG` came back as
+`<catalog> --var=schema=crunchyroll_demo --var=…` — the entire
+rest of the command line swallowed into one value.
+
+Cause: zsh does not word-split unquoted parameter expansions, so
+`databricks bundle deploy $VARS` passes one argument. `make deploy` is unaffected because
+make expands `$(VARS)` itself. The lesson is narrow but expensive: **drive the bundle
+through the Makefile**, and if a command must be typed by hand, use `${=VARS}` (zsh) or an
+array.
+
+### V69 · Both previews are available here, and the published DSL list is understated
+
+`crfs_preview_probe` (`make probe`), which registers nothing and writes nothing:
+
+* **Feature Views usable.** `fe.compute_features` on a live `Feature` over
+  `engagement_events` returned rows; online store `State.AVAILABLE`.
+* **Serverless GPU usable.** A notebook task with `compute.hardware_accelerator:
+  GPU_1xA10` got an **NVIDIA A10G, 23,028 MiB, driver 580.126.16**, `torch 2.7.1+cu126`,
+  CUDA 12.6, one visible device, a real matmul on the device, and
+  `serverless_gpu.distributed` importable.
+* **The DSL is wider than documented.** The published limitations say "limited list of
+  functions (UDAFs) supported" and show `Sum`, `Avg`, `Count`. The installed package
+  exports **18 aggregation operators** plus `CustomUDF(function_name, input_bindings)`
+  — which binds a **Unity Catalog function**, so this repo's existing `cr_*` UDFs are
+  reusable as feature transformations — plus `RowTransformation` and
+  `FeatureViewSource(features=[...])` for chaining a feature onto other features.
+
+That last point changed the plan: a full migration of the viewer-grain layer is feasible,
+not blocked. It is still not recommended, for the reasons in `docs/feature_views.md`.
+
+### V70 · Two job-shape facts, each one deploy
+
+* A serverless task that sets task-level `compute` **must** also name an environment:
+  `An environment is required for serverless task gpu_probe when compute is set on task
+  level. Please define one using environments and environment_key.`
+* `environment_version` supersedes the deprecated `client` field in an environment spec.
+
+`ai_runtime_task` also exists as a first-class DABs task type for multi-node GPU work
+(`deployments[].command_path` + `compute.accelerator_type` / `accelerator_count`, enums
+`GPU_1xA10` / `GPU_1xH100` / `GPU_8xH100`, exactly one deployment supported in preview).
+This repo does not use it — one A10 trains this model in minutes, and shipping a
+multi-node config nobody has run would be an unverified claim.
+
+### V71 · A locally-defined `Feature` has no catalog or schema
+
+First run of notebook 30 failed at `create_training_set`:
+
+```
+ValueError: Feature does not have a catalog and schema.
+Provide catalog_name and schema_name, or call register_feature().
+```
+
+`register_feature` **returns** a new object carrying the catalog and schema, and that
+returned object is what every later call needs. The notebook was passing the local
+definitions it had built. `FV.register_all` now returns the registered features and is
+idempotent — an already-registered feature is fetched with `fe.get_feature` rather than
+re-registered, so a re-run does not fail on `ALREADY_EXISTS`.
+
+### V72 · `toPandas()` and `score_batch` disagree about a nullable bigint
+
+Second run failed inside a Spark UDF during `fe.score_batch`:
+
+```
+Incompatible input types for column fv_watch_seconds_24h.
+Can not safely convert Int64 to float64.
+```
+
+The model's signature is inferred from the `input_example`, and the two conversions do
+not agree: `toPandas()` widens a nullable `bigint` to `float64` as soon as the sampled
+slice contains a null, while `score_batch` presents the same column as pandas nullable
+`Int64`. So the signature said `double` and the platform handed over `Int64`.
+
+Fix: build the example from `training_set.load_df()` and then cast each column to the
+dtype its **Spark** type implies (`bigint → Int64`, `double → float64`). The traceback
+names `mlflow/pyfunc/__init__.py` inside a Python worker rather than the logging cell,
+which is why this is worth writing down.
+
+### V73 · A viewer-only feature set cannot rank titles, and the AUC says so exactly
+
+First successful run of notebook 30 reported **holdout AUC 0.4992** on 3,459 labels —
+random to four decimal places. The cause is structural, not a tuning problem: every
+candidate row of one impression shares the viewer, so seven viewer-grain features give
+the model nothing to discriminate between titles with. The label was unlearnable by
+construction.
+
+Fix: five title-grain features (`entity=["title_id"]` — event count, watch seconds,
+distinct viewers over 7d and 30d), and one `create_training_set` call resolves both
+grains because the label frame carries both keys. That is also the more useful
+demonstration: **a Feature View's entity is per definition, and features at different
+grains compose in one training set.**
+
+Worth stating plainly because it is the kind of number a demo can hide: an AUC of 0.4992
+is the honest output of asking a model a question it has no information to answer.
+
+### V74 · `materialize_features` is not idempotent, and its table naming is not literal
+
+Three separate facts, each from a run:
+
+1. **Re-running fails.** A second call for the same feature raises
+   `ResourceAlreadyExists: Materialized features already exist for features '...'`, which
+   took down a re-run of notebook 30 outright. `FV.materialize_new` now skips what is
+   already materialized — from `fe.list_materialized_features()`, and, if the API still
+   objects, from the names in the error itself, retried once with the remainder.
+2. **`table_name_prefix` is a prefix, not a name.** The offline table came back as
+   `fv_viewer_c7klmw` — the platform appends a generated suffix — beside an internal
+   `fv_viewer_c7klmw_partial_aggregates`.
+3. **One table per (entity, window) grouping, not one per call.** The first
+   materialization of seven features produced a table carrying only the three 24h
+   columns; the 7d and 30d groups land separately.
+
+Consequence for verification: the original wait loop stopped as soon as any table
+matching the prefix had rows, so it reported success on a partial materialization **and**
+on a missing online copy. It now enumerates `list_materialized_features()`, waits on the
+offline tables and the FOREIGN online tables separately, prints each table's feature
+columns, and says `NONE YET` explicitly rather than passing when the online side has not
+arrived.
+
+### V75 · Deriving a feature list by exclusion produced two bugs in one run
+
+`crfs_gpu_train` failed with `ValueError: could not convert string to float: 'sci_fi'`,
+forty frames deep in a pandas cast. Notebook 32 had derived its numeric feature list as
+"every column not in a hardcoded NON_FEATURES set", while notebook 22 carries a curated
+list. That shortcut produced two defects at once:
+
+* `last_primary_genre` is a **string** and belongs in the categorical list — the crash;
+* `last_event_epoch_s` and `vr_last_click_epoch_s` would have been fed to the model as
+  **numbers**, where they are a proxy for calendar date and poison anything trained in
+  one window and served in another — silent, and worse than the crash.
+
+Fix: `rails.model_columns()` holds the taxonomy once (44 numeric, 3 categorical, 10
+deliberately-neither) with both rules written where the lists are, and notebook 32 and
+`ai/train_entrypoint.py` read it. `check_model_columns` reports columns the frame carries
+that nobody claimed, so a new feature going unused is visible. `build_encoder` now names
+the offending column instead of letting pandas raise from inside a cast.
+
+**The general lesson, twice now:** a list derived by exclusion silently absorbs whatever
+gets added upstream. The curated list is the one that fails loudly.
+
+### V76 · Three of four rail-ranker lookups were not point-in-time, and one of them leaked the label
+
+**The most consequential defect found in this repo, and it predates the advanced track.**
+
+`notebooks/20_vertical/22_train_rail_ranker.py` built its training set with four
+`FeatureLookup`s. Only `viewer_rail_features_ts` carried a `timestamp_lookup_key`. The
+other three — `viewer_features_current`, `recent_behavior_current`, `rail_features` — are
+one-row-per-key tables, so **every historical label, including the ten-day holdout, was
+joined to today's feature values.**
+
+For the two viewer tables that is ordinary leakage: a three-week-old impression was scored
+with what the viewer did last night. For `rail_features` it is categorically worse.
+`rail_ctr_30d` and `rail_clicks_30d` are `SUM(engaged)` and its ratio, computed over the
+full impression log — the same `engaged` column the model predicts. A holdout impression's
+own click was inside its own features. Metrics computed that way are **invalid, not
+optimistic**, and the repo was claiming point-in-time correctness on the strength of the
+one lookup that had it.
+
+Why it survived review until now: the POC *does* have a real point-in-time story
+(`viewer_rail_features_ts`, its own probe notebook `02b`, and a documented as-of join), and
+that story is true of the table it was written about. The three lookups beside it were
+never checked against the same standard.
+
+**What it took to fix, which is the interesting part:** the point-in-time sources did not
+exist. `recent_behavior_current` and `rail_features` are as-of-now aggregates, so there was
+nothing to look up historically. Both are now built as daily snapshot tables
+(`recent_behavior_ts`, `rail_features_ts`), published online where a time series table
+deduplicates to the latest row per key — measured: 27,300 offline rows over 91 days become
+300 online, one per viewer, matching `online_recent_behavior` exactly. **Serving values do
+not change; only the training join does.** This is the collapse the README already
+recommended for the horizontal tables.
+
+The lookup set now lives in `rails.rail_lookups()`. Notebooks 22 and 32 had two copies and
+had already drifted, which is how the GPU path inherited the same leakage by construction.
+
+### V77 · Both new snapshot builders had the same unbounded-window bug
+
+Found by testing the builders rather than by reading them, and the fixture is now in place:
+
+* `build_recent_behavior` filtered `event_ts > as_of - 24h` with **no upper bound**.
+* `RAIL_AUDIENCE_SQL` filtered `rendered_ts > cutoff` with **no upper bound**.
+
+Both are correct when `as_of` is the end of the data, which is the only way they had ever
+been called. Called per-day to build a snapshot table, they include the future: on a
+three-day fixture the 1 September snapshot carried 3 September's minutes (35.0 instead of
+10.0). A window meant to remove leakage that quietly reintroduces it is worse than no
+window at all, because the table's name asserts the opposite.
+
+Both bounded at both ends, and the recent-behaviour case is pinned by a fixture with
+hand-computed expectations for all six (viewer, day) cells.
+
+### V78 · Two preview-API failures that only a long run finds
+
+* `MlflowClient.search_registered_models(filter_string=...)` raises
+  `MlflowException: Argument 'filter_string' is unsupported for models in the Unity
+  Catalog` — after 44 minutes of useful work in the cells above it. The SDK's
+  `w.registered_models.list(catalog_name=..., schema_name=...)` takes catalog and schema
+  directly and returns the five models in this schema.
+* `fe.score_batch` on the torch model fails with `ModuleNotFoundError: No module named
+  'torch'`, reported as a `PythonException` from `mlflow/pyfunc` inside a Spark UDF.
+  score_batch evaluates the model in an executor, whose environment is not the notebook's;
+  `env_manager="virtualenv"` rebuilds the logged environment there. The sklearn model needs
+  none of this, which is why the difference is invisible until a torch model appears. Model
+  Serving is unaffected — it builds the model's environment when it deploys.
+
+### V79 · The corrected numbers: the leak was worth 1.1 points of lift
+
+Retrained after V76, on a fully regenerated dataset of the same shape (363,351 rail
+impressions, 300 viewers, 90 days ending 2026-09-21), 25% session sample, model version 11,
+run `730db609821d41d6882f06aed85f3cb3`. **Every feature lookup point-in-time.**
+
+| | Through the leak (v10) | Point-in-time (v11) |
+|---|---|---|
+| NDCG@5, ranker | 0.7157 | **0.6984** |
+| NDCG@5, incumbent editorial | 0.6791 | **0.6697** |
+| Lift vs incumbent | +5.39% | **+4.29%** |
+| NDCG@3, ranker vs incumbent | — | 0.5885 vs 0.5509 |
+| MRR, ranker vs incumbent | 0.7147 / 0.6775 | **0.6866 / 0.6629** |
+| AUC, all impressions | — | 0.7419 |
+| AUC, viewed impressions | 0.6345 | **0.6331** |
+| Ablated NDCG@5 (no rail-identity features) | 0.7161 | **0.7026** |
+| Spearman(model, ablated) | 0.9735 | **0.947** |
+| Holdout sessions | 537 | **542** |
+
+**What the correction cost:** about 1.1 points of NDCG@5 lift. The leak did not manufacture
+the result — the ranker still beats the order the homepage ships today — but it did make the
+headline number indefensible, which is why it was withdrawn rather than quietly adjusted.
+
+**What survived, and is stronger for having survived:** the ablation. Dropping all 13
+rail-identity features still loses nothing (0.6984 → 0.7026, slightly up, Spearman 0.947),
+exactly as it did through the leak (0.7157 → 0.7161, Spearman 0.9735). The leak and the fix
+disagree about the *level* and agree about the *shape*, so "the entire lift is
+personalization, not a better fixed rail order" now rests on two runs that differ in their
+training join.
+
+Importance by source on the corrected run, with the same instability caveat as before:
+`viewer_rail_features_ts` 0.0453, `rail_features` 0.0307, request-time UDFs 0.0297, shared
+viewer tables 0.0029, request context 0.0013. The shared viewer tables still sit near zero
+for *rail* ranking, which is the finding `vertical_ranking.md` already discusses.
+
+Also confirmed by this run: `recent_behavior_ts` holds 27,300 rows (300 viewers x 91 days)
+and its online copy 300 -- one per viewer, identical to `online_recent_behavior`. So the
+point-in-time correction changed the training join and **not** what serving reads.
+`rail_features_ts` holds 1,440 rows (16 rails x 90 days) with 1,353 distinct CTR values, and
+`r_continue`'s 30-day window fills from 129 to 959 impressions across the log -- under the
+old code every historical label saw only the last value in that series.
+
+### V80 · The watch-next ranker had the same leak, and fixing it moved its numbers too
+
+V76 was about the rail ranker. The horizontal ranker's training set had the identical
+defect: `viewer_features_current`, `recent_behavior_current` and `title_features` looked up
+with no `timestamp_lookup_key` against a log of historical impressions. And
+`title_features.popularity_30d` / `plays_30d` are aggregates of engagement, which is *this*
+model's label — so a holdout impression's own play sat inside the popularity of the title it
+was shown for.
+
+`title_features_ts` now exists (daily snapshots, 132 titles x 91 days), notebooks 02 and 06
+read it as-of, and `rails.title_lookups()` sits beside `rails.rail_lookups()` so the two
+models' lookup sets are defined together.
+
+Measured after the correction, partial run (`generate_data` deliberately skipped so the rail
+metrics from V79 stay comparable):
+
+| | Value |
+|---|---|
+| watch-next v1, holdout AUC | **0.7064** (model version 12) |
+| watch-next v2 with request-time features | **0.7139** (version 13) |
+| v2 lift over its v1 reference | **+0.0496** |
+| training / holdout rows | 61,222 / 7,302 |
+
+The previous published figures were 0.6696 for v2 against 0.6643 for v1 (+0.0053).
+
+**A third instance of the one-sided window**, in `build_title_features`: `plays_30d` counted
+every event after the lower bound with no upper bound, so a historical snapshot counted the
+future. The fixture asserts `plays_30d` grows 1, 2, 3 as the window fills; a leaky build
+returns 3 for every day.
+
+### V81 · The sharing claim broke for one commit, and the demo's own report caught it
+
+With only the rail ranker moved to the point-in-time tables, notebook 24's overlap query --
+which resolves readers from `config.HORIZONTAL_FEATURE_TABLES` / `VERTICAL_FEATURE_TABLES`
+rather than from a slide -- went to **zero shared online tables**. Correctly: the two models
+were reading different physical objects, so "one feature layer, two ranking models" had
+stopped being true.
+
+Both rankers now read `viewer_features_ts` and `recent_behavior_ts` as the same tables,
+point-in-time, and the overlap report shows two shared tables again. The notebook's design
+note earned its keep here: a parallel dict in the notebook would have kept printing the old
+answer.
+
+### V82 · A markdown cell missing `%md` costs a whole job run
+
+`crfs_versioning` failed 28 minutes in with
+`SyntaxError: invalid syntax ... Before touching a definition, this is the question to
+answer`. An edit had removed the `# MAGIC %md` opening line of one cell, so Databricks
+executed the prose as Python. Everything before it -- the spec read, the fingerprinting, the
+drift report, the in-place UDF experiment and the canary -- had already run.
+
+`scripts/check_notebooks.py` now catches it, and `make validate` runs it before
+`bundle validate`. It reproduces this exact failure in under a second, and also checks that
+`%pip` is alone in its cell. The class of bug is worth a script: every instance is free to
+find locally and charges a full job run to find remotely.
+
+### V83 · The in-place function experiment disproved this repo's own claim
+
+`feature_versioning.md`, notebook 31 and the README all asserted an asymmetry: a model's
+feature *tables* are pinned inside its version, while its on-demand *functions* are resolved
+by name per request — so `CREATE OR REPLACE FUNCTION` was described as a production change
+with no deploy and no version bump.
+
+**The measurement does not support it.** Notebook 31 §4 scored one frozen request (16 rails,
+viewer v0001, frozen request clock) against the live `crunchyroll-rail-ranker` serving
+version 11, redefined `cr_rail_taste_match` to return a constant 0.0, and re-scored:
+
+```
+rails_moved      0 of 16
+max_score_delta  0.000000
+```
+
+Identical ranks and identical scores. The function was then restored from
+`src/crfs/udfs.py` and the baseline reproduced exactly (the notebook asserts this in a
+`finally`, so the workspace cannot be left with a constant-returning UDF).
+
+So on this workspace a UC function named by a `FeatureFunction` is resolved **when the model
+is deployed**, or cached well beyond a single request — not looked up live. That is better
+news than the claim it replaces, and the docs now say so.
+
+**Two limits on concluding from this**, both now in the doc:
+
+* One endpoint, one workspace, and the first version of this experiment sampled a single
+  point 15 seconds after the change. The notebook now polls at +15s, +45s, +2min and +5min
+  and reports whichever way it comes out; a longer cache TTL or a container replacement
+  could still pick the change up later.
+* It says nothing about `fe.score_batch`, which resolves functions in the calling
+  environment and will use a new definition immediately.
+
+The versioning rule is unchanged and its justification is not: version definitions by name
+**because an in-place edit is invisible to every audit trail a model version has**, not
+because production changes instantly. It does not.
+
+**How this got into the docs in the first place** is the part worth keeping: the asymmetry
+was plausible, it was written down as fact, and the notebook that was supposed to demonstrate
+it inferred agreement from a single sample taken 15 seconds after the change. A measurement
+designed to confirm rather than to discriminate will confirm.
+
+### V84 · What else the versioning run established
+
+Same run, 20.9 minutes, all of it against the live endpoint:
+
+| Check | Result |
+|---|---|
+| served version vs `@champion` | 11 / 11 |
+| drift report for the served version | `ok` — every pinned table and function present and unchanged |
+| canary traffic split | `[(rail_ranker-11, 90), (crunchyroll_rail_ranker-10, 10)]`, **10/10 requests answered**, restored to 100% |
+| versioned-by-name function created beside v1 | `cr_rail_taste_match_v2`, and the live ranking did not move |
+| fleet drift scan | 5 registered models, all `ok` |
+
+The reverse index is the best evidence yet for the shared-feature-layer claim, because it is
+resolved from what the models actually pin rather than from a diagram:
+
+```
+viewer_features_ts       crunchyroll_ranker, crunchyroll_rail_ranker, crunchyroll_rail_ranker_gpu
+recent_behavior_ts       crunchyroll_ranker, crunchyroll_rail_ranker, crunchyroll_rail_ranker_gpu
+rail_features_ts         crunchyroll_rail_ranker, crunchyroll_rail_ranker_gpu
+viewer_rail_features_ts  crunchyroll_rail_ranker, crunchyroll_rail_ranker_gpu
+cr_hour_affinity_delta   all three rankers
+```
+
+**Three models pin the same two viewer tables.** Nobody wrote that down; it was read out of
+the model versions.
+
+One gap this exposed: `crunchyroll_ranker_fv`, the Feature-Views model, reports `0 tables,
+0 functions`. Its spec references **features**, not tables, so `versioning.spec_tables`
+finds nothing to check. The drift report says `ok` for it, which is vacuous rather than
+wrong — recorded here because a fleet view that cannot see a whole authoring path is worth
+knowing about before it is trusted.
+
+### V85 · The point-in-time fix was itself half-wrong: snapshots stamped before the window they cover
+
+A second review pass found three defects in the V76/V80 correction, and the first is the
+same leak it was meant to remove.
+
+**Snapshots were computed through the end of a day and stamped at its start.**
+`build_recent_behavior_timeseries` and `build_title_features_timeseries` both did
+`as_of = day + 1` and then `snap["ts"] = day`. A point-in-time join for an impression at
+09:00 on day D therefore matched the row stamped D 00:00 -- a row summarising events up to
+D 23:59, which can include the impression's own outcome. `viewer_rail_features_ts` had it
+right all along ("Stamped at end of day so a training row cannot read same-day clicks");
+the new builders did not follow it. Both now stamp at `as_of`.
+
+**Rail snapshots carried end-of-history title stats.** `build_rail_features_timeseries`
+took one `title_features` frame and reused it for all 90 days, so every historical rail row
+had today's `rail_avg_popularity` and `rail_content_age_days` beside a correctly
+point-in-time audience aggregate. Fixed with `rails.title_features_at`, which selects the
+snapshot in force at each `as_of` from `title_features_ts`.
+
+**The freshness beat stopped reaching the endpoints.** Notebook 05 and the app's burst
+button write `recent_behavior_current` and refresh `online_recent_behavior` -- but once the
+rankers' lookups became point-in-time they resolve `recent_behavior_ts`. So the app's panel
+would show a new value while the ranking stayed identical, and the task could report a zero
+delta as success. Notebook 05 now writes a timestamped row and refreshes
+`online_recent_behavior_ts` as well.
+
+The pattern across all three: **a correction is a change like any other, and it needs the
+same "what reads this, and what does it now mean" pass as the thing it corrected.** The
+first two put leakage back after removing it; the third broke a demo beat that had nothing
+to do with training.
+
+### V86 · Four more places the new tables were not propagated
+
+* **Batch incremental watched the wrong tables.** `26_batch_scoring.py` listed the
+  `_current` tables in `FEATURE_TABLES` while the model's spec resolved the `_ts` ones, so a
+  change to a table the model actually reads produced no CDF activity and affected viewers
+  kept stale rankings. The list is now derived from `rails.rail_lookups(cfg)`.
+* **Teardown left them behind.** A `--full` teardown left `recent_behavior_ts`,
+  `title_features_ts` and `rail_features_ts` plus four online copies and their sync
+  pipelines standing -- billable resources in a workspace that looks torn down.
+* **The burst logged six events while claiming three.** `crfs_event_burst` runs notebook 11
+  (appends 3) and then notebook 05, which appended 3 more before recomputing. Notebook 05
+  now supports `n_events=0` (recompute-only) and the job passes it.
+* **The fresh-workspace deploy order is now stated.** `resources/app.yml` binds the Lakebase
+  database as a resource, and that id is generated by `fe.create_online_store` in notebook
+  01 -- so on an empty workspace it does not exist at first deploy, and the default in
+  `databricks.yml` is another workspace's id. `preflight.sh` prints the required order when
+  it cannot resolve the id, and QUICKSTART says it where a new user will read it.
+
+### V87 · Two self-contradictions the review caught before a reader did
+
+* `versioning.drift_report` still told operators that a changed function means "live
+  behaviour has ALREADY changed" -- the exact claim V83 disproved three commits earlier. It
+  now reports the observed pinned-or-cached behaviour and its uncertainty.
+* Notebook 31's fleet scan had its own inline copy of the drift logic, which skipped the
+  comparison when a model had no fingerprint tag and left `findings` empty -- so `ok` came
+  out `True` and untagged models were labelled healthy, while `drift_report` classified the
+  identical state as `unverifiable`. The scan now calls `drift_report`. Two code paths, two
+  answers, and the wrong one was the reassuring one.
+
+Also fixed from the same pass: the Feature-Views wait reported `online_ready` as soon as
+*any* online table existed, so one group's arrival masked the others still building; it now
+requires one online destination per offline group. And `train_streaming` treated physical
+Parquet batch order as chronological -- Spark does not promise it -- so it now verifies the
+batches are ordered by the timestamp column and refuses rather than reporting an arbitrary
+holdout as temporal.
+
+### V88 · GPU training works, and the measurement points somewhere unexpected
+
+`crfs_gpu_train` on the corrected training set, model version 5, run
+`732810502ad94478a90822972e55b4de`:
+
+| | |
+|---|---|
+| device | NVIDIA A10G, CUDA |
+| **training time** | **11.9 seconds** (8 epochs, 73,292 rows, 44 features) |
+| **whole job** | **38 minutes** |
+| holdout AUC | 0.7319 |
+
+**Training is half a percent of the job.** The rest is the point-in-time join -- four as-of
+lookups now -- plus the Parquet export. The estimator substitution that `open_items.md` §4
+asked for is proven, and the same measurement says an accelerator is not what makes training
+feasible at this size: `toPandas()` on the full join was the original failure, and the join
+itself is what costs 38 minutes. Scale the join before the estimator.
+
+**Two dead ends for scoring it off-endpoint on serverless**, both measured:
+
+```
+fe.score_batch(...)                        ModuleNotFoundError: No module named 'torch'
+fe.score_batch(..., env_manager=virtualenv) did not resolve it on this workspace
+mlflow.pyfunc.load_model(...).predict(...)  ValueError: score_batch with local_uri is not
+                                            supported on serverless runtime.
+```
+
+So a `fe.log_model`-ed torch model can only be run through **a serving endpoint** here,
+where Model Serving builds the environment at deploy. Notebook 32 reports this rather than
+failing, having previously failed the whole 76-minute job over an optional comparison. The
+sklearn ranker is unaffected because scikit-learn is already in the worker, which is why the
+constraint stays invisible until a deep model appears.
+
+### V89 · The app's latency was two warehouse statements, not the models
+
+Measured 2026-09-23 before replacing the Streamlit page: the two SQL statements it ran per
+page view (rail eligibility state, entitled candidates) took **1.48 s and 1.43 s p50** from a
+laptop on a warm serverless warehouse — ~1.2 s each net of RTT, serial, before either
+endpoint was called. The endpoints themselves answer in tens of milliseconds.
+
+The replacement (FastAPI + React, `docs/homepage_service.md`) makes no warehouse call per
+request. Measured with `scripts/bench_app.py --n 80`, server-side inside the app container:
+
+| | p50 | p95 |
+|---|---|---|
+| homepage total, both rankers + 3 Lakebase reads | **94 ms** | **142 ms** |
+| rail ranker | 67 ms | 98 ms |
+| watch-next ranker | 61 ms | 92 ms |
+| Lakebase keyed read | 3.7–3.9 ms | 5–6 ms |
+
+80/80 served by both models. A second run minutes after a fresh deploy: p50 109 / p95 176 ms,
+again 80/80. The first run, before per-viewer retrieval caching, was p50 152 /
+p95 288 ms with 3/60 title rankings falling back at the 400 ms budget.
+
+### V90 · A pooled connection the server had already closed looked like an endpoint failure
+
+After ~100 s idle, the first call on each pooled HTTP/2 connection failed in **3 ms** with
+`Server disconnected` — the serving front end closes idle connections before the client's
+300 s keep-alive expiry. Reproduced twice. The breaker counted it as an endpoint failure, so
+the homepage served the editorial order to a healthy endpoint. Fixed with a 30 s idle expiry
+and one retry on a transport error; re-tested after 110 s idle: `status: ok`.
+
+### V91 · Two request-path endpoints were scaled to zero
+
+`crunchyroll-candidate-retriever` answered its first request in **42.6 s** (scaled to zero);
+`crunchyroll-watch-next-ranker` was also `scale_to_zero_enabled=true`. Both now `false`
+(live via `update-config`, and in notebooks 03 and 08). Cost note in `cost_and_sizing.md`.
+
+### V92 · The explainer agent's `predict()` is a placeholder
+
+`notebooks/50_agent/12_agent_explain.py` defines `CrunchyrollExplainerAgent.predict` to return
+`"Agent endpoint deployment required for live interaction"`, and no `crunchyroll-explainer-agent`
+endpoint exists on the workspace. Deploying it would have put a fixed string behind the app's
+"Why?" button. The app now calls `databricks-claude-haiku-4-5` directly with the online rows it
+read; first token ~1.1 s, full answer ~2.5 s.
+
+### V93 · Apps' in-container npm install failed on the workspace npm proxy
+
+First deploy of the React frontend: `npm warn tarball ... seems to be corrupted` for a dozen
+packages, then `E404 ... yallist-3.1.1.tgz is not in this registry` from
+the workspace npm proxy, failing the deployment in 12.6 s. The build now happens on the
+laptop (`make frontend`) and `app/frontend/dist` is shipped through `sync.include`; with no
+`package.json` at the app root, Apps runs pip only.
+
+### V94 · The ops panel's sync lag was a missing grant
+
+Every table's sync status came back `User <app SP> does not have View permissions on pipeline
+...`. `scripts/grant_app_uc.sh` now grants CAN_VIEW on each online table's sync pipeline.
+
+### V95 · The canary gate's first decision: the GPU model does not serve
+
+`crfs_canary` run 833952297646682: `crunchyroll_rail_ranker_gpu` v5 behind
+`crunchyroll-rail-ranker` at 10%. Direct per-entity scoring of 40 viewers' eligible rails
+(616 rail rows): champion 0/40 errors, p50 74 / p95 134 ms; challenger **40/40 errors**.
+Routed: 176/200 answered, the 24 failures matching the 10% share. ROLLBACK; final routes
+`[('rail_ranker-11', 100)]`, asserted. The error text was not recorded — only counts — so
+`canary.summarise` now keeps the first error per entity.
+
+### V96 · Why the GPU model failed: the PIT timestamp leaked into its signature
+
+Read from `cr_rail_inference_payload` once it landed: 65 rows for the challenger entity, all
+status 400 — `MlflowException: Model is missing inputs ['ts']`. Notebook 32's `input_example`
+came from the Parquet export, which carries `ts` back for the time-based split, so the raw
+model's signature required it; the endpoint only ever sends the seven request fields. Notebook
+32 now drops `ts` and the label-side columns from the example, asserts none remain, and runs a
+"request keys only" self-test before `fe.log_model`. v5 is unchanged; a retrain registers a
+fixed version.
+
+### V97 · The GPU fix, proven: v6 serves; the metastore quota was the last blocker
+
+Two serverless A10 attempts never got an accelerator (50 min in "Waiting for cluster", then
+`Cluster '...-cnx' is unhealthy`, 0 ms executed; the second cancelled). A one-off run on
+`GPU_1xH100` got one in ~4 min and trained (13.5 s, 5% sample, 2 epochs), then failed at
+registration: `QUOTA_EXCEEDED: Cannot create 1 Registered Model(s) in Metastore ... (estimated
+count: 5001, limit: 5000)` — MLflow's register path calls create_registered_model first, and
+the quota check precedes the already-exists check. Notebook 32 now logs, then adds the version
+with `create_model_version` when the model exists. Rerun registered v6; `crfs_canary` then
+scored it **0/40 errors, p95 139 ms vs 150 ms limit, Spearman 0.61 → PROMOTE** (dry run).
+Four unused registered models of this user were deleted to take the metastore under quota.
+
+### V98 · 2026-09-24 · The whole thing again, from one command
+
+`./setup.sh --profile <PROFILE> --catalog <catalog> --target dev --yes` ran every stage to
+completion (bootstrap, deploy, horizontal, vertical, grants, app, bench, verify) and ended
+`verify passed`, with one warning: `route_optimized=False` on the rail endpoint, which
+cannot be enabled in place. A laptop network drop mid-run (the workspace IP access list
+rejected a new address) cut the CLI's polling at stage 4; the job kept running server-side
+and the remaining stages were resumed with `--stage`.
+
+It re-generated the synthetic data, so every model retrained and the numbers moved:
+
+| | before | after this run |
+|---|---|---|
+| rail ranker `@champion` | v11 | **v12** (`rail_ranker-12`, provisioned concurrency 4–32, `scale_to_zero=false`) |
+| watch-next ranker | v13 | **v15** |
+| candidate retriever | v7 | **v8** |
+| rail NDCG@5, ranker vs incumbent editorial | 0.6984 vs 0.6697 (+4.29%) | **0.6978 vs 0.6602 (+5.70%)**, 524 holdout sessions |
+| ablation (no rail-identity features) NDCG@5 | 0.7026 | **0.7067**, Spearman 0.931 vs full |
+| holdout AUC all / viewed | 0.7419 / 0.6331 | **0.7424 / 0.6319** |
+
+The ablation conclusion held for a third time: removing all 13 rail-identity features does
+not lose NDCG, so the lift is personalization.
+
+### V99 · 2026-09-24 · The benchmark after the rebuild, and the app against it
+
+`crfs_benchmark` (in region, v12; `docs/serving_benchmark.md`, regenerated by `make
+bench-pull`):
+
+* fan-out flat: p50 **50–55 ms** from 1 to 32 rails per request;
+* ramp: no errors through concurrency 8 (**147 req/s**, p95 72 ms); from 16 up the endpoint
+  answers ~**214–218 req/s** and sheds the rest with 429;
+* sustained concurrency 32 for 600 s: first 30 s window 83.9 req/s, best 201.2 req/s —
+  **2.4× scale-up, 90% of best in 60 s**. The previous run measured 1.0× (206 req/s from
+  its first window), so how much capacity is already there when load arrives varies run to run;
+* spike 2 → 48: 10,157 of 15,395 requests rejected, p50 103 / p95 255 ms; recovery at
+  p50 49.5 / p95 61 ms with 15 residual 429s;
+* server-side `execution_time_ms` p50 / p95 **64 / 688 ms** over 8,542 captured requests,
+  0 non-200.
+
+`scripts/bench_app.py` against the deployed app afterwards: homepage server-side total
+**p50 119 / p95 216 ms**, **40 of 40** served by both models.
+
+### V100 · 2026-09-24 · Nothing in the repo is pinned to the workspace it was built on
+
+The bundle targets carried a fixed `workspace.host`, and every script fell back to this
+workspace's profile and catalog when an argument was missing. Now the host comes from the
+CLI profile, the profile is remembered in `.crfs.vars` once passed, `warehouse_id` and
+`notification_email` have no default, and scripts refuse to guess. Verified:
+
+* `databricks bundle validate -t dev` and `-t prod` with the `.crfs.vars` vars: OK;
+* without them: `no value assigned to required variable warehouse_id`;
+* `make preflight` with no profile and no `.crfs.vars`: `No profile. Pass PROFILE=<name>`;
+* `scripts/verify.sh` / `teardown.sh` with neither: a usage line, exit 2 — nothing acts on a
+  workspace that was not named;
+* `scripts/preflight.sh` now checks CLI ≥ 1.17.0 and Node ≥ 18 + npm.

@@ -1,0 +1,2133 @@
+{
+  "datasets": [
+    {
+      "name": "serving_latency",
+      "displayName": "Serving latency and volume",
+      "queryLines": [
+        "SELECT date_trunc('hour', request_time) AS hour_bucket,\n",
+        "       served_entity_id,\n",
+        "       count(*) AS requests,\n",
+        "       round(percentile_approx(execution_duration_ms, 0.5), 1)  AS p50_ms,\n",
+        "       round(percentile_approx(execution_duration_ms, 0.95), 1) AS p95_ms,\n",
+        "       round(percentile_approx(execution_duration_ms, 0.99), 1) AS p99_ms,\n",
+        "       round(100.0 * sum(CASE WHEN status_code <> 200 THEN 1 ELSE 0 END) / count(*), 2) AS error_pct\n",
+        "FROM __CATALOG__.__SCHEMA__.cr_ranker_inference_payload\n",
+        "WHERE request_date >= current_date() - 14\n",
+        "GROUP BY 1, 2\n",
+        "ORDER BY 1 DESC\n"
+      ]
+    },
+    {
+      "name": "request_mix",
+      "displayName": "What the application actually sends",
+      "queryLines": [
+        "WITH r AS (\n",
+        "  SELECT databricks_request_id,\n",
+        "         from_json(request, 'dataframe_records ARRAY<STRUCT<viewer_id STRING, title_id STRING, surface STRING, device STRING, locale STRING, hour_of_day INT>>') AS p\n",
+        "  FROM __CATALOG__.__SCHEMA__.cr_ranker_inference_payload\n",
+        "  WHERE request_date >= current_date() - 14)\n",
+        "SELECT rec.surface, rec.device, rec.locale, rec.hour_of_day,\n",
+        "       count(*) AS rows_scored,\n",
+        "       count(DISTINCT databricks_request_id) AS requests\n",
+        "FROM r LATERAL VIEW explode(r.p.dataframe_records) t AS rec\n",
+        "GROUP BY 1, 2, 3, 4\n",
+        "ORDER BY rows_scored DESC\n"
+      ]
+    },
+    {
+      "name": "score_by_genre",
+      "displayName": "Score distribution by genre",
+      "queryLines": [
+        "WITH r AS (\n",
+        "  SELECT databricks_request_id,\n",
+        "         from_json(request,  'dataframe_records ARRAY<STRUCT<title_id STRING>>') AS req,\n",
+        "         from_json(response, 'predictions ARRAY<DOUBLE>') AS res\n",
+        "  FROM __CATALOG__.__SCHEMA__.cr_ranker_inference_payload\n",
+        "  WHERE request_date >= current_date() - 14 AND status_code = 200),\n",
+        "z AS (\n",
+        "  SELECT req.dataframe_records[i].title_id AS title_id, res.predictions[i] AS score\n",
+        "  FROM r LATERAL VIEW posexplode(res.predictions) p AS i, s)\n",
+        "SELECT t.primary_genre,\n",
+        "       count(*) AS scored,\n",
+        "       round(avg(z.score), 4) AS mean_score,\n",
+        "       round(max(z.score), 4) AS max_score\n",
+        "FROM z JOIN __CATALOG__.__SCHEMA__.titles t ON t.title_id = z.title_id\n",
+        "GROUP BY 1\n",
+        "ORDER BY mean_score DESC\n"
+      ]
+    },
+    {
+      "name": "sync_health",
+      "displayName": "Online table sync health",
+      "queryLines": [
+        "SELECT online_table,\n",
+        "       max_by(detailed_state, captured_at) AS detailed_state,\n",
+        "       max(captured_at) AS last_checked,\n",
+        "       round(max_by(lag_seconds, captured_at), 1) AS lag_seconds,\n",
+        "       max_by(delta_commit_version, captured_at) AS source_commit,\n",
+        "       max_by(last_processed_commit_version, captured_at) AS processed_commit\n",
+        "FROM __CATALOG__.__SCHEMA__.crfs_ops_sync_log\n",
+        "GROUP BY 1\n",
+        "ORDER BY 1\n"
+      ]
+    },
+    {
+      "name": "feature_freshness",
+      "displayName": "Feature freshness",
+      "queryLines": [
+        "SELECT 'recent_behavior_current' AS feature_table,\n",
+        "       count(*) AS rows,\n",
+        "       round(max(last_event_epoch_s), 0) AS newest_event_epoch_s,\n",
+        "       round((unix_timestamp(current_timestamp()) - max(last_event_epoch_s)) / 60.0, 1) AS newest_event_age_min\n",
+        "FROM __CATALOG__.__SCHEMA__.recent_behavior_current\n",
+        "UNION ALL\n",
+        "SELECT 'engagement_events' AS feature_table,\n",
+        "       count(*) AS rows,\n",
+        "       round(max(unix_timestamp(event_ts)), 0) AS newest_event_epoch_s,\n",
+        "       round((unix_timestamp(current_timestamp()) - max(unix_timestamp(event_ts))) / 60.0, 1) AS newest_event_age_min\n",
+        "FROM __CATALOG__.__SCHEMA__.engagement_events\n"
+      ]
+    },
+    {
+      "name": "cost",
+      "displayName": "Daily spend, list price",
+      "queryLines": [
+        "SELECT u.usage_date,\n",
+        "       u.sku_name,\n",
+        "       round(sum(u.usage_quantity), 2) AS dbu,\n",
+        "       round(sum(u.usage_quantity * p.pricing.default), 2) AS usd_list\n",
+        "FROM system.billing.usage u\n",
+        "JOIN system.billing.list_prices p\n",
+        "  ON u.sku_name = p.sku_name\n",
+        " AND u.usage_end_time >= p.price_start_time\n",
+        " AND (p.price_end_time IS NULL OR u.usage_end_time < p.price_end_time)\n",
+        "WHERE (u.usage_metadata.endpoint_id = 'ep-wild-dawn-d2ao0nf7'\n",
+        "    OR u.usage_metadata.endpoint_name LIKE 'crunchyroll-%')\n",
+        "  AND u.usage_date >= current_date() - 14\n",
+        "GROUP BY 1, 2\n",
+        "ORDER BY 1 DESC, usd_list DESC\n"
+      ]
+    },
+    {
+      "name": "bench_ramp",
+      "displayName": "Measured latency vs concurrency",
+      "queryLines": [
+        "-- One row per benchmark phase, written by notebooks/90_ops/25_serving_benchmark.py.\n",
+        "-- `where` distinguishes an in-region job from a laptop; mixing them on one axis\n",
+        "-- would be comparing the platform against somebody's wifi.\n",
+        "SELECT concurrency,\n",
+        "       `where`,\n",
+        "       rows_per_request,\n",
+        "       max(p50_ms) AS p50_ms,\n",
+        "       max(p95_ms) AS p95_ms,\n",
+        "       max(p99_ms) AS p99_ms,\n",
+        "       max(rps)    AS requests_per_second,\n",
+        "       sum(requests - ok) AS failed\n",
+        "FROM __CATALOG__.__SCHEMA__.crfs_serving_benchmark\n",
+        "WHERE phase = 'ramp'\n",
+        "  AND measured_at >= (SELECT max(measured_at) - INTERVAL 1 DAY FROM __CATALOG__.__SCHEMA__.crfs_serving_benchmark)\n",
+        "GROUP BY 1, 2, 3\n",
+        "ORDER BY 2, 1\n"
+      ]
+    },
+    {
+      "name": "bench_fanout",
+      "displayName": "Marginal cost of one more candidate rail",
+      "queryLines": [
+        "-- Latency against candidates per request at concurrency 1. Each additional rail is\n",
+        "-- one more composite-key read against the online store inside the same call, so the\n",
+        "-- slope of this is what a bigger homepage costs.\n",
+        "SELECT rows_per_request AS candidate_rails,\n",
+        "       endpoint,\n",
+        "       max(p50_ms) AS p50_ms,\n",
+        "       max(p95_ms) AS p95_ms,\n",
+        "       round(max(p50_ms) / greatest(rows_per_request, 1), 2) AS p50_ms_per_rail\n",
+        "FROM __CATALOG__.__SCHEMA__.crfs_serving_benchmark\n",
+        "WHERE phase IN ('fanout', 'features_only')\n",
+        "  AND measured_at >= (SELECT max(measured_at) - INTERVAL 1 DAY FROM __CATALOG__.__SCHEMA__.crfs_serving_benchmark)\n",
+        "GROUP BY 1, 2\n",
+        "ORDER BY 2, 1\n"
+      ]
+    },
+    {
+      "name": "bench_spike",
+      "displayName": "Traffic spike: baseline, spike, recovery",
+      "queryLines": [
+        "SELECT phase,\n",
+        "       concurrency,\n",
+        "       max(p50_ms) AS p50_ms,\n",
+        "       max(p95_ms) AS p95_ms,\n",
+        "       max(p99_ms) AS p99_ms,\n",
+        "       max(rps)    AS requests_per_second,\n",
+        "       sum(requests - ok) AS failed,\n",
+        "       max(note)   AS note\n",
+        "FROM __CATALOG__.__SCHEMA__.crfs_serving_benchmark\n",
+        "WHERE phase LIKE 'spike%'\n",
+        "  AND measured_at >= (SELECT max(measured_at) - INTERVAL 1 DAY FROM __CATALOG__.__SCHEMA__.crfs_serving_benchmark)\n",
+        "GROUP BY 1, 2\n",
+        "ORDER BY CASE phase WHEN 'spike_baseline' THEN 1 WHEN 'spike_load' THEN 2 ELSE 3 END\n"
+      ]
+    },
+    {
+      "name": "bench_config",
+      "displayName": "The configuration these numbers belong to",
+      "queryLines": [
+        "-- A latency table without the endpoint configuration beside it is unfalsifiable:\n",
+        "-- scale-to-zero, provisioned concurrency and route optimization each move the answer\n",
+        "-- more than any model change would.\n",
+        "SELECT max(measured_at) AS measured_at,\n",
+        "       `where`,\n",
+        "       endpoint,\n",
+        "       get_json_object(max(endpoint_config_json), '$.route_optimized') AS route_optimized,\n",
+        "       get_json_object(max(endpoint_config_json), '$.served_entities[0].scale_to_zero') AS scale_to_zero,\n",
+        "       get_json_object(max(endpoint_config_json), '$.served_entities[0].min_provisioned_concurrency') AS min_concurrency,\n",
+        "       get_json_object(max(endpoint_config_json), '$.served_entities[0].max_provisioned_concurrency') AS max_concurrency,\n",
+        "       get_json_object(max(endpoint_config_json), '$.served_entities[0].workload_size') AS workload_size,\n",
+        "       get_json_object(max(server_side_json), '$.p50_ms') AS server_p50_ms,\n",
+        "       get_json_object(max(server_side_json), '$.p95_ms') AS server_p95_ms\n",
+        "FROM __CATALOG__.__SCHEMA__.crfs_serving_benchmark\n",
+        "GROUP BY 2, 3\n",
+        "ORDER BY 1 DESC\n"
+      ]
+    },
+    {
+      "name": "rail_ranking_shift",
+      "displayName": "How far the learned ranker moves each rail",
+      "queryLines": [
+        "-- The incumbent editorial order against the rail's measured engagement. A rail whose\n",
+        "-- CTR rank is far from its editorial rank is one the current homepage is misplacing.\n",
+        "SELECT r.rail_name,\n",
+        "       r.rail_type,\n",
+        "       r.editorial_rank,\n",
+        "       rank() OVER (ORDER BY f.rail_ctr_30d DESC) AS ctr_rank,\n",
+        "       r.editorial_rank - rank() OVER (ORDER BY f.rail_ctr_30d DESC) AS positions_misplaced,\n",
+        "       round(f.rail_ctr_30d, 4)  AS rail_ctr_30d,\n",
+        "       f.rail_impressions_30d,\n",
+        "       round(f.rail_avg_watch_minutes_30d, 1) AS avg_watch_minutes\n",
+        "FROM __CATALOG__.__SCHEMA__.rail_features f\n",
+        "JOIN __CATALOG__.__SCHEMA__.rails r ON r.rail_id = f.rail_id\n",
+        "ORDER BY r.editorial_rank\n"
+      ]
+    },
+    {
+      "name": "position_propensity",
+      "displayName": "Position bias in the homepage log",
+      "queryLines": [
+        "-- The confound the vertical ranker has to correct for: P(viewport | position) measured\n",
+        "-- from the log, and the inverse-propensity weight that undoes it.\n",
+        "SELECT rail_position,\n",
+        "       impressions,\n",
+        "       p_view,\n",
+        "       ips_weight\n",
+        "FROM __CATALOG__.__SCHEMA__.rail_position_propensity\n",
+        "ORDER BY rail_position\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "ops",
+      "displayName": "Serving, freshness and cost",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layout": [
+        {
+          "widget": {
+            "name": "hdr",
+            "textbox_spec": "## Crunchyroll Feature Store on Lakebase\nServing latency, what the app sends, freshness, and what it costs. Every number here is read from the platform: inference tables, the synced-table API (persisted by notebook 13) and `system.billing`."
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "w_serving_latency_requests",
+            "textbox_spec": null,
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "serving_latency",
+                  "fields": [
+                    {
+                      "name": "requests",
+                      "expression": "SUM(`requests`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "requests",
+                  "displayName": "Requests, 14 days"
+                }
+              },
+              "frame": {
+                "title": "Requests, 14 days",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "w_serving_latency_p95_ms",
+            "textbox_spec": null,
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "serving_latency",
+                  "fields": [
+                    {
+                      "name": "p95_ms",
+                      "expression": "MAX(`p95_ms`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "p95_ms",
+                  "displayName": "p95 model execution (ms)"
+                }
+              },
+              "frame": {
+                "title": "p95 model execution (ms)",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "w_cost_usd_list",
+            "textbox_spec": null,
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "cost",
+                  "fields": [
+                    {
+                      "name": "usd_list",
+                      "expression": "SUM(`usd_list`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "usd_list",
+                  "displayName": "Spend, 14 days (USD list)",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "title": "Spend, 14 days (USD list)",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "w_serving_latency_line",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "serving_latency",
+                  "fields": [
+                    {
+                      "name": "hour_bucket",
+                      "expression": "hour_bucket"
+                    },
+                    {
+                      "name": "p50_ms",
+                      "expression": "p50_ms"
+                    },
+                    {
+                      "name": "p95_ms",
+                      "expression": "p95_ms"
+                    },
+                    {
+                      "name": "p99_ms",
+                      "expression": "p99_ms"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "hour_bucket",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "hour"
+                },
+                "y": {
+                  "fieldName": "p50_ms",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "p50 ms"
+                },
+                "extra": [
+                  {
+                    "fieldName": "p95_ms",
+                    "displayName": "p95 ms"
+                  },
+                  {
+                    "fieldName": "p99_ms",
+                    "displayName": "p99 ms"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Endpoint latency percentiles by hour",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 4,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_serving_latency_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "serving_latency",
+                  "fields": [
+                    {
+                      "name": "served_entity_id",
+                      "expression": "served_entity_id"
+                    },
+                    {
+                      "name": "requests",
+                      "expression": "requests"
+                    },
+                    {
+                      "name": "p50_ms",
+                      "expression": "p50_ms"
+                    },
+                    {
+                      "name": "p95_ms",
+                      "expression": "p95_ms"
+                    },
+                    {
+                      "name": "p99_ms",
+                      "expression": "p99_ms"
+                    },
+                    {
+                      "name": "error_pct",
+                      "expression": "error_pct"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "served_entity_id",
+                    "displayName": "served entity id",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "fieldName": "requests",
+                    "displayName": "requests",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float"
+                  },
+                  {
+                    "fieldName": "p50_ms",
+                    "displayName": "p50 ms",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float"
+                  },
+                  {
+                    "fieldName": "p95_ms",
+                    "displayName": "p95 ms",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float"
+                  },
+                  {
+                    "fieldName": "p99_ms",
+                    "displayName": "p99 ms",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float"
+                  },
+                  {
+                    "fieldName": "error_pct",
+                    "displayName": "error pct",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Latency and errors by served entity",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 5,
+            "width": 2,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "hdr2",
+            "textbox_spec": "### Keys and context in, ranked titles out\nThe request carries only what the application knows. Everything else is a governed lookup the endpoint performs itself \u2014 which is why this table is so narrow."
+          },
+          "position": {
+            "x": 0,
+            "y": 11,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "w_request_mix_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "request_mix",
+                  "fields": [
+                    {
+                      "name": "surface",
+                      "expression": "surface"
+                    },
+                    {
+                      "name": "device",
+                      "expression": "device"
+                    },
+                    {
+                      "name": "locale",
+                      "expression": "locale"
+                    },
+                    {
+                      "name": "hour_of_day",
+                      "expression": "hour_of_day"
+                    },
+                    {
+                      "name": "rows_scored",
+                      "expression": "rows_scored"
+                    },
+                    {
+                      "name": "requests",
+                      "expression": "requests"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "surface",
+                    "displayName": "surface",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "fieldName": "device",
+                    "displayName": "device",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "fieldName": "locale",
+                    "displayName": "locale",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "fieldName": "hour_of_day",
+                    "displayName": "hour of day",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float"
+                  },
+                  {
+                    "fieldName": "rows_scored",
+                    "displayName": "rows scored",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float"
+                  },
+                  {
+                    "fieldName": "requests",
+                    "displayName": "requests",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Request mix",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_score_by_genre_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "score_by_genre",
+                  "fields": [
+                    {
+                      "name": "primary_genre",
+                      "expression": "primary_genre"
+                    },
+                    {
+                      "name": "mean_score",
+                      "expression": "mean_score"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "primary_genre",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "primary_genre"
+                },
+                "y": {
+                  "fieldName": "mean_score",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "mean score"
+                }
+              },
+              "frame": {
+                "title": "Mean predicted play probability by genre",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 12,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "hdr3",
+            "textbox_spec": "### Freshness and sync health\n`crfs_ops_sync_log` is written by notebook 13 from `GET /api/2.0/database/synced_tables/{name}` \u2014 dashboards cannot call REST, so the notebook persists the API's own numbers."
+          },
+          "position": {
+            "x": 0,
+            "y": 18,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "w_sync_health_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "sync_health",
+                  "fields": [
+                    {
+                      "name": "online_table",
+                      "expression": "online_table"
+                    },
+                    {
+                      "name": "detailed_state",
+                      "expression": "detailed_state"
+                    },
+                    {
+                      "name": "lag_seconds",
+                      "expression": "lag_seconds"
+                    },
+                    {
+                      "name": "source_commit",
+                      "expression": "source_commit"
+                    },
+                    {
+                      "name": "processed_commit",
+                      "expression": "processed_commit"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "online_table",
+                    "displayName": "online table",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "fieldName": "detailed_state",
+                    "displayName": "detailed state",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "fieldName": "lag_seconds",
+                    "displayName": "lag seconds",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float"
+                  },
+                  {
+                    "fieldName": "source_commit",
+                    "displayName": "source commit",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float"
+                  },
+                  {
+                    "fieldName": "processed_commit",
+                    "displayName": "processed commit",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Online table sync state",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 19,
+            "width": 3,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "w_feature_freshness_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "feature_freshness",
+                  "fields": [
+                    {
+                      "name": "feature_table",
+                      "expression": "feature_table"
+                    },
+                    {
+                      "name": "rows",
+                      "expression": "rows"
+                    },
+                    {
+                      "name": "newest_event_age_min",
+                      "expression": "newest_event_age_min"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "feature_table",
+                    "displayName": "feature table",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "fieldName": "rows",
+                    "displayName": "rows",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float"
+                  },
+                  {
+                    "fieldName": "newest_event_age_min",
+                    "displayName": "newest event age min",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "How old is the newest event we have",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 19,
+            "width": 3,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "hdr4",
+            "textbox_spec": "### Cost\nThe online store cannot scale to zero \u2014 it is the one always-on line. Everything else idles at nothing. List prices; a committed contract is lower."
+          },
+          "position": {
+            "x": 0,
+            "y": 24,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "w_cost_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "cost",
+                  "fields": [
+                    {
+                      "name": "usage_date",
+                      "expression": "usage_date"
+                    },
+                    {
+                      "name": "sku_name",
+                      "expression": "sku_name"
+                    },
+                    {
+                      "name": "dbu",
+                      "expression": "dbu"
+                    },
+                    {
+                      "name": "usd_list",
+                      "expression": "usd_list"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "usage_date",
+                    "displayName": "usage date",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float"
+                  },
+                  {
+                    "fieldName": "sku_name",
+                    "displayName": "sku name",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "fieldName": "dbu",
+                    "displayName": "dbu",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float"
+                  },
+                  {
+                    "fieldName": "usd_list",
+                    "displayName": "usd list",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "float"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Daily spend by SKU",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 25,
+            "width": 6,
+            "height": 6
+          }
+        }
+      ]
+    },
+    {
+      "name": "serving",
+      "displayName": "Vertical ranking and measured serving",
+      "layout": [
+        {
+          "widget": {
+            "name": "t_bench_head",
+            "textbox_spec": "## Rail ranking \u2014 measured serving characteristics\n\nWritten by `notebooks/90_ops/25_serving_benchmark.py` (`make bench`). Every latency here is reported with the concurrency it was measured at and the endpoint configuration it belongs to. `where = in_region_job` is the platform; `where = laptop` includes the round trip from outside the region.",
+            "queries": [],
+            "spec": {
+              "version": 2,
+              "widgetType": "textbox",
+              "encodings": {},
+              "frame": {
+                "showTitle": false
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "w_bench_config",
+            "textbox_spec": null,
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "bench_config",
+                  "fields": [
+                    {
+                      "name": "measured_at",
+                      "expression": "`measured_at`"
+                    },
+                    {
+                      "name": "where",
+                      "expression": "`where`"
+                    },
+                    {
+                      "name": "endpoint",
+                      "expression": "`endpoint`"
+                    },
+                    {
+                      "name": "route_optimized",
+                      "expression": "`route_optimized`"
+                    },
+                    {
+                      "name": "scale_to_zero",
+                      "expression": "`scale_to_zero`"
+                    },
+                    {
+                      "name": "min_concurrency",
+                      "expression": "`min_concurrency`"
+                    },
+                    {
+                      "name": "max_concurrency",
+                      "expression": "`max_concurrency`"
+                    },
+                    {
+                      "name": "workload_size",
+                      "expression": "`workload_size`"
+                    },
+                    {
+                      "name": "server_p50_ms",
+                      "expression": "`server_p50_ms`"
+                    },
+                    {
+                      "name": "server_p95_ms",
+                      "expression": "`server_p95_ms`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "measured_at",
+                    "displayName": "measured_at",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 0
+                  },
+                  {
+                    "fieldName": "where",
+                    "displayName": "where",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 1
+                  },
+                  {
+                    "fieldName": "endpoint",
+                    "displayName": "endpoint",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 2
+                  },
+                  {
+                    "fieldName": "route_optimized",
+                    "displayName": "route_optimized",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 3
+                  },
+                  {
+                    "fieldName": "scale_to_zero",
+                    "displayName": "scale_to_zero",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 4
+                  },
+                  {
+                    "fieldName": "min_concurrency",
+                    "displayName": "min_concurrency",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 5
+                  },
+                  {
+                    "fieldName": "max_concurrency",
+                    "displayName": "max_concurrency",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 6
+                  },
+                  {
+                    "fieldName": "workload_size",
+                    "displayName": "workload_size",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 7
+                  },
+                  {
+                    "fieldName": "server_p50_ms",
+                    "displayName": "server_p50_ms",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 8
+                  },
+                  {
+                    "fieldName": "server_p95_ms",
+                    "displayName": "server_p95_ms",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 9
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Endpoint configuration and server-side execution_time_ms",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 12,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "w_bench_ramp_lat",
+            "textbox_spec": null,
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "bench_ramp",
+                  "fields": [
+                    {
+                      "name": "concurrency",
+                      "expression": "`concurrency`"
+                    },
+                    {
+                      "name": "p50_ms",
+                      "expression": "`p50_ms`"
+                    },
+                    {
+                      "name": "p95_ms",
+                      "expression": "`p95_ms`"
+                    },
+                    {
+                      "name": "p99_ms",
+                      "expression": "`p99_ms`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "concurrency",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "concurrency"
+                },
+                "y": {
+                  "fields": [
+                    {
+                      "fieldName": "p50_ms",
+                      "displayName": "p50_ms"
+                    },
+                    {
+                      "fieldName": "p95_ms",
+                      "displayName": "p95_ms"
+                    },
+                    {
+                      "fieldName": "p99_ms",
+                      "displayName": "p99_ms"
+                    }
+                  ],
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "ms"
+                }
+              },
+              "frame": {
+                "title": "Latency vs concurrency \u2014 watch where p95 separates from p50",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_bench_ramp_rps",
+            "textbox_spec": null,
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "bench_ramp",
+                  "fields": [
+                    {
+                      "name": "concurrency",
+                      "expression": "`concurrency`"
+                    },
+                    {
+                      "name": "requests_per_second",
+                      "expression": "`requests_per_second`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "concurrency",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "concurrency"
+                },
+                "y": {
+                  "fields": [
+                    {
+                      "fieldName": "requests_per_second",
+                      "displayName": "requests_per_second"
+                    }
+                  ],
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "ms"
+                }
+              },
+              "frame": {
+                "title": "Achieved throughput vs concurrency \u2014 still climbing means headroom",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 8,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_bench_ramp_tbl",
+            "textbox_spec": null,
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "bench_ramp",
+                  "fields": [
+                    {
+                      "name": "where",
+                      "expression": "`where`"
+                    },
+                    {
+                      "name": "concurrency",
+                      "expression": "`concurrency`"
+                    },
+                    {
+                      "name": "rows_per_request",
+                      "expression": "`rows_per_request`"
+                    },
+                    {
+                      "name": "p50_ms",
+                      "expression": "`p50_ms`"
+                    },
+                    {
+                      "name": "p95_ms",
+                      "expression": "`p95_ms`"
+                    },
+                    {
+                      "name": "p99_ms",
+                      "expression": "`p99_ms`"
+                    },
+                    {
+                      "name": "requests_per_second",
+                      "expression": "`requests_per_second`"
+                    },
+                    {
+                      "name": "failed",
+                      "expression": "`failed`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "where",
+                    "displayName": "where",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 0
+                  },
+                  {
+                    "fieldName": "concurrency",
+                    "displayName": "concurrency",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 1
+                  },
+                  {
+                    "fieldName": "rows_per_request",
+                    "displayName": "rows_per_request",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 2
+                  },
+                  {
+                    "fieldName": "p50_ms",
+                    "displayName": "p50_ms",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 3
+                  },
+                  {
+                    "fieldName": "p95_ms",
+                    "displayName": "p95_ms",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 4
+                  },
+                  {
+                    "fieldName": "p99_ms",
+                    "displayName": "p99_ms",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 5
+                  },
+                  {
+                    "fieldName": "requests_per_second",
+                    "displayName": "requests_per_second",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 6
+                  },
+                  {
+                    "fieldName": "failed",
+                    "displayName": "failed",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 7
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Concurrency ramp, as measured",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 14,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_bench_fanout",
+            "textbox_spec": null,
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "bench_fanout",
+                  "fields": [
+                    {
+                      "name": "candidate_rails",
+                      "expression": "`candidate_rails`"
+                    },
+                    {
+                      "name": "p50_ms",
+                      "expression": "`p50_ms`"
+                    },
+                    {
+                      "name": "p95_ms",
+                      "expression": "`p95_ms`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "candidate_rails",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "candidate_rails"
+                },
+                "y": {
+                  "fields": [
+                    {
+                      "fieldName": "p50_ms",
+                      "displayName": "p50_ms"
+                    },
+                    {
+                      "fieldName": "p95_ms",
+                      "displayName": "p95_ms"
+                    }
+                  ],
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "ms"
+                }
+              },
+              "frame": {
+                "title": "Latency vs candidate rails per request (each rail = one more online lookup)",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 20,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_bench_fanout_tbl",
+            "textbox_spec": null,
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "bench_fanout",
+                  "fields": [
+                    {
+                      "name": "endpoint",
+                      "expression": "`endpoint`"
+                    },
+                    {
+                      "name": "candidate_rails",
+                      "expression": "`candidate_rails`"
+                    },
+                    {
+                      "name": "p50_ms",
+                      "expression": "`p50_ms`"
+                    },
+                    {
+                      "name": "p95_ms",
+                      "expression": "`p95_ms`"
+                    },
+                    {
+                      "name": "p50_ms_per_rail",
+                      "expression": "`p50_ms_per_rail`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "endpoint",
+                    "displayName": "endpoint",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 0
+                  },
+                  {
+                    "fieldName": "candidate_rails",
+                    "displayName": "candidate_rails",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 1
+                  },
+                  {
+                    "fieldName": "p50_ms",
+                    "displayName": "p50_ms",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 2
+                  },
+                  {
+                    "fieldName": "p95_ms",
+                    "displayName": "p95_ms",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 3
+                  },
+                  {
+                    "fieldName": "p50_ms_per_rail",
+                    "displayName": "p50_ms_per_rail",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 4
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Marginal cost per candidate rail \u2014 ranker vs Feature Serving",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 20,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_bench_spike",
+            "textbox_spec": null,
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "bench_spike",
+                  "fields": [
+                    {
+                      "name": "phase",
+                      "expression": "`phase`"
+                    },
+                    {
+                      "name": "concurrency",
+                      "expression": "`concurrency`"
+                    },
+                    {
+                      "name": "p50_ms",
+                      "expression": "`p50_ms`"
+                    },
+                    {
+                      "name": "p95_ms",
+                      "expression": "`p95_ms`"
+                    },
+                    {
+                      "name": "p99_ms",
+                      "expression": "`p99_ms`"
+                    },
+                    {
+                      "name": "requests_per_second",
+                      "expression": "`requests_per_second`"
+                    },
+                    {
+                      "name": "failed",
+                      "expression": "`failed`"
+                    },
+                    {
+                      "name": "note",
+                      "expression": "`note`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "phase",
+                    "displayName": "phase",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 0
+                  },
+                  {
+                    "fieldName": "concurrency",
+                    "displayName": "concurrency",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 1
+                  },
+                  {
+                    "fieldName": "p50_ms",
+                    "displayName": "p50_ms",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 2
+                  },
+                  {
+                    "fieldName": "p95_ms",
+                    "displayName": "p95_ms",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 3
+                  },
+                  {
+                    "fieldName": "p99_ms",
+                    "displayName": "p99_ms",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 4
+                  },
+                  {
+                    "fieldName": "requests_per_second",
+                    "displayName": "requests_per_second",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 5
+                  },
+                  {
+                    "fieldName": "failed",
+                    "displayName": "failed",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 6
+                  },
+                  {
+                    "fieldName": "note",
+                    "displayName": "note",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 7
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Traffic spike: baseline, step change, recovery",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 26,
+            "width": 12,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "t_vertical_head",
+            "textbox_spec": "## Vertical ranking \u2014 what the model is correcting for\n\nThe homepage log was produced by the incumbent editorial order, so engagement is confounded with position. Left: the measured confound. Right: which rails the current order is misplacing.",
+            "queries": [],
+            "spec": {
+              "version": 2,
+              "widgetType": "textbox",
+              "encodings": {},
+              "frame": {
+                "showTitle": false
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 31,
+            "width": 12,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "w_propensity",
+            "textbox_spec": null,
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "position_propensity",
+                  "fields": [
+                    {
+                      "name": "rail_position",
+                      "expression": "`rail_position`"
+                    },
+                    {
+                      "name": "p_view",
+                      "expression": "`p_view`"
+                    },
+                    {
+                      "name": "ips_weight",
+                      "expression": "`ips_weight`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "rail_position",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "rail_position"
+                },
+                "y": {
+                  "fields": [
+                    {
+                      "fieldName": "p_view",
+                      "displayName": "p_view"
+                    },
+                    {
+                      "fieldName": "ips_weight",
+                      "displayName": "ips_weight"
+                    }
+                  ],
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "ms"
+                }
+              },
+              "frame": {
+                "title": "P(viewport | position) and the inverse-propensity weight",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 34,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_rail_shift",
+            "textbox_spec": null,
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "rail_ranking_shift",
+                  "fields": [
+                    {
+                      "name": "rail_name",
+                      "expression": "`rail_name`"
+                    },
+                    {
+                      "name": "rail_type",
+                      "expression": "`rail_type`"
+                    },
+                    {
+                      "name": "editorial_rank",
+                      "expression": "`editorial_rank`"
+                    },
+                    {
+                      "name": "ctr_rank",
+                      "expression": "`ctr_rank`"
+                    },
+                    {
+                      "name": "positions_misplaced",
+                      "expression": "`positions_misplaced`"
+                    },
+                    {
+                      "name": "rail_ctr_30d",
+                      "expression": "`rail_ctr_30d`"
+                    },
+                    {
+                      "name": "rail_impressions_30d",
+                      "expression": "`rail_impressions_30d`"
+                    },
+                    {
+                      "name": "avg_watch_minutes",
+                      "expression": "`avg_watch_minutes`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "rail_name",
+                    "displayName": "rail_name",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 0
+                  },
+                  {
+                    "fieldName": "rail_type",
+                    "displayName": "rail_type",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 1
+                  },
+                  {
+                    "fieldName": "editorial_rank",
+                    "displayName": "editorial_rank",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 2
+                  },
+                  {
+                    "fieldName": "ctr_rank",
+                    "displayName": "ctr_rank",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 3
+                  },
+                  {
+                    "fieldName": "positions_misplaced",
+                    "displayName": "positions_misplaced",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 4
+                  },
+                  {
+                    "fieldName": "rail_ctr_30d",
+                    "displayName": "rail_ctr_30d",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 5
+                  },
+                  {
+                    "fieldName": "rail_impressions_30d",
+                    "displayName": "rail_impressions_30d",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 6
+                  },
+                  {
+                    "fieldName": "avg_watch_minutes",
+                    "displayName": "avg_watch_minutes",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "type": "string",
+                    "displayAs": "string",
+                    "order": 7
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Editorial order vs measured engagement",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 34,
+            "width": 6,
+            "height": 6
+          }
+        }
+      ]
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "canvasBackgroundColor": {
+        "light": "#FCFCFC",
+        "dark": "#1F272D"
+      },
+      "widgetBackgroundColor": {
+        "light": "#FFFFFF",
+        "dark": "#11171C"
+      },
+      "fontColor": {
+        "light": "#11171C",
+        "dark": "#E8ECF0"
+      },
+      "selectionColor": {
+        "light": "#F47521",
+        "dark": "#FFA35C"
+      },
+      "visualizationColors": [
+        "#F47521",
+        "#FF7054",
+        "#DE5582",
+        "#995495",
+        "#4E5185",
+        "#1D425C",
+        "#99DDB4"
+      ],
+      "widgetHeaderAlignment": "LEFT"
+    }
+  }
+}

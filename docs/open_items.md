@@ -1,0 +1,164 @@
+# Open items
+
+What is unfinished or undecided in this POC, and the one thing only Crunchyroll can
+answer. This replaced a ten-question discovery list, which was the wrong artifact: most
+of those were questions any engineer would ask any recommender customer, not things this
+build actually depends on.
+
+Ordered by how much the answer changes what gets built.
+
+---
+
+## 1 · Rendered rail position in the homepage impression log
+
+**The only question here that Crunchyroll must answer, and no work on our side
+substitutes for it.**
+
+Every label in a homepage log was observed at a position the *incumbent* policy chose.
+Rails at the top get engagement because they are at the top. This POC corrects for that
+with inverse-propensity weights from a measured `P(viewport | position)` curve — 0.97 at
+position 1 falling to 0.09 at position 16 on synthetic data.
+
+What we need to know about the log **as it exists today**:
+
+* is the **rail-level impression** recorded at all, or only title-level clicks?
+* is the **rendered position index** of each rail on the response stored?
+* is there any **visibility signal** — rail scrolled into view, dwell — or only clicks?
+
+**Why it decides things:** if position is not logged, vertical ranking cannot be
+debiased, and the first model will largely relearn the incumbent editorial order while
+reporting a good offline number for doing so. That is not a tuning problem; the labels
+are wrong. Adding position and a visibility flag to the log is cheap, has no ML
+dependency, and is the highest-value change to make before any model work. If a viewport
+signal already exists, the propensity estimate becomes direct rather than modelled.
+
+---
+
+## 2 · Not measured: online-store read latency at real cardinality
+
+**The largest untested assumption in the POC.**
+
+The ~51 ms p50 rests on one precomputed row per `(viewer, rail)`. This POC has **4,681**
+such rows. Real scale is MAU × eligible rails — tens of millions to a billion.
+
+At tens of millions the design stands and the question is only Lakebase capacity class
+and read replicas. Approaching a billion, the honest options narrow to publishing top-N
+rails per viewer rather than the full cross, or moving part of the viewer × rail signal
+into a request-time computation. **A scale test at representative cardinality is needed
+before anyone commits to a latency target.**
+
+---
+
+## 3 · Traffic splitting — now demonstrated, still not a rollout process
+
+The ask says "model/version management **and deployment**". This POC pins an immutable
+version and sends it **100%** of traffic. Model Serving supports splitting traffic
+across served entities, and that is how a ranking model should actually be rolled out —
+a canary on a small share, watched on the inference table, before it takes the homepage.
+
+Promotion and deployment are already two separate steps here (retrain moves
+`@champion`; nothing reaches traffic until notebook 23 runs), so the missing piece was
+the split itself, not the discipline around it.
+
+**Since:** `notebooks/30_advanced/31_feature_versioning.py` §6 puts two model versions
+behind the endpoint at 90/10 and restores 100%, and **`notebooks/30_advanced/33_canary_gate.py`
+adds the process**: paired per-entity scoring of identical requests, a gate on error rate,
+p95 and ranking agreement, a PROMOTE / ROLLBACK record in `canary_decisions`, and a
+guaranteed restore. Its first run rolled back the GPU challenger, which failed 40 of 40
+requests when served because its signature required the PIT `ts` column; after the fix in
+notebook 32 the retrained v6 passed ([canary.md](canary.md)). What is still absent is an **online-quality**
+metric — engagement by served entity, joined from the inference table and the homepage log —
+which needs traffic volume and time a minutes-long gate does not have.
+
+---
+
+## 4 · Training at production volume — the substitution is now proven, the volume is not
+
+The point-in-time join is Spark and scales. The **estimator does not** — it collects to
+pandas and fits scikit-learn on one driver. Measured here: 363k labels against a
+421k-row time-series table did not finish inside a 60-minute task on two separate runs,
+which is why the demo fits on a 25% session sample.
+
+The substitution is an estimator that trains in minibatches rather than in one driver's
+memory, fed from `training_set.load_df()` with no collect, touching neither the feature
+layer, the feature spec, nor the serving path.
+
+**Since:** `notebooks/30_advanced/32_gpu_train.py` does exactly that — the same
+point-in-time training set exported to Parquet on a UC volume, a torch MLP trained on a
+serverless A10 in minibatches, logged with `fe.log_model` so the feature spec still
+travels and the model is a drop-in for the same endpoint. `src/crfs/train_gpu.py` is the
+module; `ai/train.yaml` runs it from a laptop.
+
+What remains unproven is the **volume**, not the mechanism: this still trains on the 25%
+session sample, because the 60-minute ceiling was the point-in-time join and the pandas
+collect together, and only the second of those has been removed. The join is Spark and
+scales; measuring it at Crunchyroll's cardinality is the outstanding test.
+
+---
+
+## 5 · Fallback ranking — now built in the reference homepage service
+
+Past available capacity the endpoint returns **429** rather than queueing, and recovery
+is immediate. That is good behaviour, but it means the homepage must be able to render
+without a fresh ranking.
+
+**Since (2026-09-23):** the app is now a FastAPI homepage service that does exactly this —
+a timeout budget per call (rails 300 ms), a circuit breaker per endpoint, and three tiers:
+model → the viewer's last good order filtered to today's eligible set → editorial. Every
+response names the tier that served it, and the app can simulate slow or failed endpoints
+to show the tiers live. See [homepage_service.md](homepage_service.md#fallback--docsopen_itemsmd-5-now-built).
+
+**What is still Crunchyroll's to decide:** where the last-good ranking lives across a
+fleet (it is in-process here), how stale it may be before editorial is better, and the
+budget itself — which belongs to the homepage SLO, not the model. The budget matters: the
+in-region homepage is **~100 ms p50 / 140–180 ms p95** with both rankers (two runs), so a 300 ms budget is
+generous; a tighter one trades fallback rate for tail latency and should be set from the
+inference table's p99, not from these numbers.
+
+---
+
+## 6 · Platform: route optimization is rejected on this workspace
+
+Every latency number in `serving_benchmark.md` carries the standard workspace
+request-path overhead, because `route_optimized` was rejected here and it is a
+**create-time only** property — it cannot be added to the existing endpoint.
+
+This is ours to escalate, not Crunchyroll's to answer, and it should be raised with the
+account team **before** any tighter latency commitment depends on it.
+
+---
+
+## 7 · The point-in-time claim was only true of one table
+
+Recorded here because it changes how the POC's own evidence should be read, not just what
+the code does. Three of the rail ranker's four feature lookups had no timestamp, and
+`rail_features` carries aggregates of the label — so the ranking metrics the first readout
+quoted were invalid, not conservative. `verification_log.md` V76 has the full account.
+
+Fixed: `recent_behavior_ts` and `rail_features_ts` are built and published, every lookup is
+as-of, and the lookup set is defined once in `rails.rail_lookups()`. Serving values are
+unchanged, because a published time series table deduplicates to the latest row per key.
+
+**What this leaves open:** the corrected numbers are lower than the withdrawn ones, and by
+how much is the only honest answer to "does vertical ranking beat the editorial order on
+this data". Read the re-measured figures in `vertical_ranking.md`, and treat the original
+lift as what it was — a measurement of a leak.
+
+The generalisable lesson for Crunchyroll's own build: **a feature table whose columns are
+aggregates of the label cannot be looked up without a timestamp.** `rail_ctr_30d` is the
+obvious case; anything derived from engagement is the same case.
+
+---
+
+## Closed since the first draft
+
+* **Title features shared only at source-data level.** The rail content stats were
+  computed from the raw `titles` table rather than the `title_features` feature table,
+  so title signal was shared as source data rather than as governed features. Now
+  sourced from `title_features`, which also removed a duplicate definition of content
+  age and a mild leakage (the generator's latent `intrinsic_popularity` in place of the
+  observed `popularity_30d`). See `verification_log.md` V57.
+* **How long autoscaling takes.** Originally found by accident — two ramp sweeps ten
+  minutes apart differing by 2.6× — and now measured deliberately by a sustained-load
+  phase that reports throughput per 30-second window. The readings vary: 2.4× in ~60 s on
+  v12 (2026-09-24), none at all on the v11 run. See V50 and `serving_benchmark.md`.

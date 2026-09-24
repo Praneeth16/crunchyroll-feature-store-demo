@@ -12,8 +12,8 @@ tokens correctly.
 
 Usage:
     python scripts/measure_online_latency.py \\
-        --profile fe-vm-lakebase-praneeth \\
-        --catalog serverless_lakebase_praneeth_catalog \\
+        --profile <PROFILE> \\
+        --catalog <catalog> \\
         --schema crunchyroll_demo \\
         --table online_session_features \\
         --key viewer_id \\

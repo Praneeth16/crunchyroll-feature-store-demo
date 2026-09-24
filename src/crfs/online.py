@@ -19,7 +19,6 @@ The published online tables are read-only. Never write to them -- the sync
 pipeline owns them and a manual write breaks it.
 """
 import time
-import datetime as dt
 
 CRED_API = "/api/2.0/postgres/credentials"
 TOKEN_TTL_S = 50 * 60
@@ -117,6 +116,37 @@ class OnlineStore:
         sql = f'SELECT {cols} FROM "{self.pg_schema}"."{table}" WHERE {key_col} = %s'
         t0 = time.perf_counter()
         rows, columns = self.query(sql, (key_val,))
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        return (rows[0] if rows else None), columns, elapsed_ms
+
+    def keyed_read_composite(self, table: str, keys: dict, cols: str = "*"):
+        """A multi-column keyed lookup -- the shape viewer x rail features need.
+
+        Column names are interpolated because psycopg cannot parameterise
+        identifiers, so they are validated against a strict identifier pattern
+        first: these come from application code, but a lookup helper that will
+        splice anything into a WHERE clause is a bad helper.
+        Returns (row_or_None, columns, elapsed_ms).
+        """
+        import re
+        ident = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+        for k in keys:
+            if not ident.fullmatch(k):
+                raise ValueError(f"not a valid column name: {k!r}")
+        # `table` and `cols` were spliced in unvalidated while the docstring claimed
+        # otherwise. No caller passes anything but literals today, so this closes a
+        # latent hazard rather than a live one -- but a helper that will splice anything
+        # into a FROM clause is exactly what the docstring says it must not be.
+        if not ident.fullmatch(table):
+            raise ValueError(f"not a valid table name: {table!r}")
+        if cols != "*":
+            for c in cols.split(","):
+                if not ident.fullmatch(c.strip()):
+                    raise ValueError(f"not a valid column list: {cols!r}")
+        where = " AND ".join(f"{k} = %s" for k in keys)
+        sql = f'SELECT {cols} FROM "{self.pg_schema}"."{table}" WHERE {where}'
+        t0 = time.perf_counter()
+        rows, columns = self.query(sql, tuple(keys.values()))
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         return (rows[0] if rows else None), columns, elapsed_ms
 

@@ -22,10 +22,19 @@ bundle:
 include:
   - resources/*.yml
 
+# The app's built frontend is gitignored (dist/) but must reach the app. `make frontend`
+# builds it on the laptop; this ships it. See app/frontend/vite.config.ts for why the
+# build does not happen in the app container.
+sync:
+  include:
+    - app/frontend/dist/**
+
 variables:
   catalog:
-    description: UC catalog holding every demo object.
-    default: serverless_lakebase_praneeth_catalog
+    description: >-
+      UC catalog holding every demo object. scripts/bootstrap.sh writes the one you pass
+      with --catalog (or the first managed catalog it finds) to .crfs.vars.
+    default: main
   schema:
     description: UC schema holding every demo object.
     default: crunchyroll_demo
@@ -45,10 +54,18 @@ variables:
     description: >-
       Full Lakebase database resource path for the app's postgres resource. The id
       is generated at project creation, so scripts/preflight.sh discovers it --
-      never guess this value.
-    default: projects/crunchyroll-online-store/branches/production/databases/db-p78x-mcrka97vph
+      never guess this value. The placeholder only lets the first deploy of a fresh
+      workspace validate before notebook 01 has created the store.
+    default: projects/crunchyroll-online-store/branches/production/databases/resolved-by-bootstrap
   ranker_endpoint:
     default: crunchyroll-watch-next-ranker
+  rail_ranker_endpoint:
+    description: >-
+      Vertical (rail) ranking endpoint. Deliberately separate from
+      ranker_endpoint: this one sits in the homepage request path and is
+      configured without scale-to-zero, with explicit provisioned
+      concurrency and with route optimization.
+    default: crunchyroll-rail-ranker
   retriever_endpoint:
     default: crunchyroll-candidate-retriever
   feature_endpoint:
@@ -59,7 +76,7 @@ variables:
     description: Databricks-hosted chat model backing the explainer agent.
     default: databricks-claude-sonnet-4-5
   warehouse_id:
-    default: 4d39ac2e32b72a3a
+    description: SQL warehouse id. Discovered (or created) by scripts/bootstrap.sh; no default.
   app_name:
     description: Databricks App name. Lowercase and dashes only.
     default: crfs-watch-next
@@ -69,14 +86,15 @@ variables:
     description: Last day of generated history. Empty means yesterday.
     default: ""
   notification_email:
-    default: praneeth.paikray@databricks.com
+    description: Job failure notifications. scripts/bootstrap.sh sets it to the deploying user.
 
 targets:
   dev:
     mode: development
     default: true
-    workspace:
-      host: https://fevm-serverless-lakebase-praneeth.cloud.databricks.com
+    # No workspace.host: the host comes from the CLI profile (--profile), so the same
+    # bundle deploys to any workspace without an edit.
+    #
     # dev and prod deliberately target the SAME schema, online store and
     # endpoints. This is a single-workspace demo: a second schema would mean a
     # second set of published online tables on the same always-on Lakebase store,
@@ -90,10 +108,9 @@ targets:
   prod:
     mode: production
     workspace:
-      host: https://fevm-serverless-lakebase-praneeth.cloud.databricks.com
-      root_path: /Workspace/Users/praneeth.paikray@databricks.com/.bundle/${bundle.name}/${bundle.target}
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     variables:
       schema: crunchyroll_demo
     permissions:
       - level: CAN_MANAGE
-        user_name: praneeth.paikray@databricks.com
+        user_name: ${workspace.current_user.userName}

@@ -1,0 +1,899 @@
+<title>Vertical Ranking Readout</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=Public+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;600&display=swap">
+
+<style>
+:root{
+  --ink:#12131A;
+  --ink-2:#3A3D4A;
+  --ink-3:#6E7284;
+  --paper:#F7F6F3;
+  --card:#FFFFFF;
+  --rule:#DFDDD6;
+  --batch:#1E6B45;
+  --batch-soft:#E4F2EA;
+  --online:#1B5490;
+  --online-soft:#E3EDF8;
+  --warn:#9A5B12;
+  --warn-soft:#FBF0DF;
+  --gap:#8E2C3C;
+  --gap-soft:#F9E7E9;
+  --accent:#D6532B;
+  --shadow:0 1px 2px rgba(18,19,26,.05), 0 8px 24px -12px rgba(18,19,26,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ink:#EFEEEA;
+    --ink-2:#C3C2BC;
+    --ink-3:#8F8F8A;
+    --paper:#14151A;
+    --card:#1C1E25;
+    --rule:#31343E;
+    --batch:#6DC79B;
+    --batch-soft:#16301F;
+    --online:#7FB6EE;
+    --online-soft:#132538;
+    --warn:#E2AE6B;
+    --warn-soft:#2E2416;
+    --gap:#E9909C;
+    --gap-soft:#31191E;
+    --accent:#F07B52;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --ink:#EFEEEA;
+  --ink-2:#C3C2BC;
+  --ink-3:#8F8F8A;
+  --paper:#14151A;
+  --card:#1C1E25;
+  --rule:#31343E;
+  --batch:#6DC79B;
+  --batch-soft:#16301F;
+  --online:#7FB6EE;
+  --online-soft:#132538;
+  --warn:#E2AE6B;
+  --warn-soft:#2E2416;
+  --gap:#E9909C;
+  --gap-soft:#31191E;
+  --accent:#F07B52;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:"Public Sans","Helvetica Neue",Arial,sans-serif;
+  font-size:15px;
+  line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{padding-inline:16px;padding-block:0;max-width:1180px;margin:0 auto}
+
+/* ---------- top rail ---------- */
+.rail{
+  position:sticky;
+  top:env(safe-area-inset-top, 0px);
+  z-index:20;
+  background:color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--rule);
+}
+.rail-in{
+  max-width:1180px;margin:0 auto;padding:10px 16px;
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+}
+.brandmark{
+  font-family:"Bricolage Grotesque",system-ui,sans-serif;
+  font-weight:800;font-size:13px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--accent);
+}
+.rail-meta{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink-3)}
+.rail-nav{margin-left:auto;display:flex;align-items:center;gap:8px}
+.rail-nav button{
+  font:600 12px/1 "Public Sans",sans-serif;
+  color:var(--ink);background:var(--card);border:1px solid var(--rule);
+  border-radius:999px;padding:7px 13px;cursor:pointer;
+}
+.rail-nav button:hover{border-color:var(--ink-3)}
+.rail-nav button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#counter{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink-3);min-width:52px;text-align:center}
+.progress{height:2px;background:var(--rule)}
+.progress > i{display:block;height:2px;background:var(--accent);width:0}
+
+/* ---------- slides ---------- */
+.slide{
+  min-height:clamp(520px, 78vh, 860px);
+  padding-block:clamp(28px,5vh,64px);
+  border-bottom:1px solid var(--rule);
+  display:flex;flex-direction:column;justify-content:center;gap:22px;
+  scroll-margin-top:56px;
+}
+.slide:last-of-type{border-bottom:none}
+.eyebrow{
+  font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--ink-3);display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;
+}
+.eyebrow .tag{padding:2px 8px;border-radius:4px;font-weight:600;letter-spacing:.08em}
+.tag.batch{background:var(--batch-soft);color:var(--batch)}
+.tag.online{background:var(--online-soft);color:var(--online)}
+.tag.gap{background:var(--gap-soft);color:var(--gap)}
+h1{
+  font-family:"Bricolage Grotesque",system-ui,sans-serif;
+  font-weight:800;font-size:clamp(30px,5.4vw,58px);line-height:1.03;letter-spacing:-.022em;
+  margin:0;text-wrap:balance;
+}
+h2{
+  font-family:"Bricolage Grotesque",system-ui,sans-serif;
+  font-weight:800;font-size:clamp(23px,3.4vw,38px);line-height:1.1;letter-spacing:-.015em;
+  margin:0;text-wrap:balance;
+}
+h3{
+  font-family:"Bricolage Grotesque",system-ui,sans-serif;
+  font-weight:600;font-size:15px;letter-spacing:.01em;margin:0 0 8px;
+}
+p{margin:0;max-width:66ch}
+p.lede{font-size:clamp(16px,1.9vw,20px);color:var(--ink-2);line-height:1.45}
+.small{font-size:13px;color:var(--ink-3);max-width:74ch}
+strong{font-weight:600}
+code,.mono{font-family:"IBM Plex Mono",monospace;font-size:.9em}
+code{background:var(--card);border:1px solid var(--rule);border-radius:4px;padding:1px 5px}
+
+/* pull-quote: the one sentence */
+.thesis{
+  font-size:clamp(17px,2.3vw,25px);
+  line-height:1.34;
+  font-family:"Bricolage Grotesque",system-ui,sans-serif;
+  font-weight:400;
+  max-width:56ch;
+  padding-top:16px;
+  position:relative;
+}
+.thesis::before{
+  content:"";
+  position:absolute;
+  top:0;left:0;
+  width:34px;height:2px;
+  background:var(--accent);
+}
+.thesis em{font-style:normal;background:var(--warn-soft);color:var(--warn);padding:0 4px;border-radius:3px}
+
+/* grids */
+.cols{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));align-items:start}
+.cols-2{display:grid;gap:20px;grid-template-columns:1fr 1fr;align-items:start}
+@media (max-width:760px){.cols-2{grid-template-columns:1fr}}
+
+.card{background:var(--card);border:1px solid var(--rule);border-radius:10px;padding:16px 18px;box-shadow:var(--shadow)}
+.card.batch{border-top:3px solid var(--batch)}
+.card.online{border-top:3px solid var(--online)}
+.card.gapc{border-top:3px solid var(--gap)}
+.card.plain{box-shadow:none;background:transparent}
+
+/* stat tiles — used only where the figure IS the point */
+.stats{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.stat{background:var(--card);border:1px solid var(--rule);border-radius:10px;padding:14px 16px}
+.stat b{
+  display:block;font-family:"Bricolage Grotesque",system-ui,sans-serif;font-weight:800;
+  font-size:clamp(24px,3.4vw,36px);line-height:1;letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;
+}
+.stat span{display:block;margin-top:7px;font-size:12px;color:var(--ink-3);line-height:1.35}
+.stat.b b{color:var(--batch)} .stat.o b{color:var(--online)} .stat.w b{color:var(--warn)} .stat.g b{color:var(--gap)}
+
+/* tables */
+.tbl-scroll{overflow-x:auto;max-width:100%;border:1px solid var(--rule);border-radius:10px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:13px;min-width:520px}
+th,td{text-align:left;padding:9px 13px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{
+  font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:600;white-space:nowrap;
+}
+tbody tr:last-child td{border-bottom:none}
+td.num{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;white-space:nowrap}
+.pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.pill.reuse{background:var(--batch-soft);color:var(--batch)}
+.pill.new{background:var(--gap-soft);color:var(--gap)}
+.pill.met{background:var(--batch-soft);color:var(--batch)}
+.pill.part{background:var(--warn-soft);color:var(--warn)}
+.pill.no{background:var(--gap-soft);color:var(--gap)}
+
+/* figure / screenshots */
+figure{margin:0}
+figure img{width:100%;height:auto;display:block;border:1px solid var(--rule);border-radius:10px;box-shadow:var(--shadow)}
+figcaption{margin-top:9px;font-size:12px;color:var(--ink-3);max-width:70ch}
+
+/* diagram + charts */
+.figbox{background:var(--card);border:1px solid var(--rule);border-radius:10px;padding:12px;overflow-x:auto}
+.figbox svg{display:block;max-width:100%;height:auto}
+.chart-note{margin-top:10px;font-size:12px;color:var(--ink-3)}
+
+/* list */
+ul.clean{margin:0;padding-left:1.05em}
+ul.clean li{margin-bottom:7px;max-width:68ch}
+ul.clean li::marker{color:var(--ink-3)}
+
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:13.5px;align-items:baseline}
+.kv dt{color:var(--ink-3);white-space:nowrap}
+.kv dd{margin:0;font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
+
+.footnote{border-top:1px solid var(--rule);padding-top:12px;font-size:12px;color:var(--ink-3);max-width:80ch}
+
+@media (prefers-reduced-motion: reduce){*{scroll-behavior:auto!important;transition:none!important}}
+html{scroll-behavior:smooth}
+</style>
+
+<div class="rail">
+  <div class="rail-in">
+    <span class="brandmark">Databricks&nbsp;·&nbsp;POC readout</span>
+    <span class="rail-meta">model v12 @champion · verified 2026-09-24</span>
+    <span class="rail-nav">
+      <button id="prev" type="button" aria-label="Previous slide">←</button>
+      <span id="counter">1 / 13</span>
+      <button id="next" type="button" aria-label="Next slide">→</button>
+    </span>
+  </div>
+  <div class="progress"><i id="bar"></i></div>
+</div>
+
+<div class="wrap">
+
+<!-- 1 ................................................................. -->
+<section class="slide" id="s1">
+  <div class="eyebrow"><span>Crunchyroll × Databricks</span><span>Vertical ranking POC</span></div>
+  <h1>Ordering the collections on the homepage — batch now, real time later</h1>
+  <p class="thesis">
+    Both paths are built, and they are <em>the same model</em>. The batch path for
+    November and the real-time path for later read the same feature definitions, the same
+    training set and the same registered model version.
+  </p>
+  <div class="stats">
+    <div class="stat b"><b>16 / 16</b><span>collections at identical rank, batch vs online</span></div>
+    <div class="stat b"><b>1.0</b><span>Spearman(batch order, online order)</span></div>
+    <div class="stat o"><b>51 ms</b><span>endpoint p50 in region, 12 collections</span></div>
+    <div class="stat w"><b>+5.70%</b><span>NDCG@5 over the incumbent editorial order</span></div>
+  </div>
+  <p class="small">
+    Model and serving figures were measured on the reference workspace (AWS us-east-1)
+    against registered model version 12 on 24 Sep 2026; the batch-versus-online parity
+    figures against version 11 on 18 Sep 2026. Synthetic data — 300 viewers,
+    132 titles, 363,351 homepage impressions. The lift is evidence the pipeline works, not a
+    forecast of Crunchyroll's lift.
+  </p>
+</section>
+
+<!-- 2 ................................................................. -->
+<section class="slide" id="s2">
+  <div class="eyebrow"><span>01</span><span>The two rankings, in your vocabulary</span></div>
+  <h2>Different grain, different label, different model — one feature store</h2>
+  <div class="cols-2">
+    <div class="card">
+      <h3>Horizontal ranking</h3>
+      <p class="small" style="margin-bottom:10px">Ordering anime <strong>within</strong> a collection.</p>
+      <dl class="kv">
+        <dt>endpoint</dt><dd>crunchyroll-watch-next-ranker</dd>
+        <dt>grain</dt><dd>viewer × title</dd>
+        <dt>status</dt><dd>READY, v15</dd>
+      </dl>
+    </div>
+    <div class="card">
+      <h3>Vertical ranking</h3>
+      <p class="small" style="margin-bottom:10px">Ordering the <strong>collections</strong> on the homepage. This POC.</p>
+      <dl class="kv">
+        <dt>endpoint</dt><dd>crunchyroll-rail-ranker</dd>
+        <dt>grain</dt><dd>viewer × collection</dd>
+        <dt>status</dt><dd>READY, v12 @champion</dd>
+      </dl>
+    </div>
+  </div>
+  <p class="lede">
+    The interesting number is not that we built a second ranker. It is what the second ranker
+    cost: <strong>two feature tables and three UDFs.</strong> Four of its six feature inputs are
+    the same governed tables the watch-next ranker already reads, with no second pipeline
+    behind them.
+  </p>
+</section>
+
+<!-- 3 ................................................................. -->
+<section class="slide" id="s3">
+  <div class="eyebrow"><span>02</span><span>Architecture</span></div>
+  <h2>One feature layer, one model, two last miles</h2>
+  <div class="figbox">
+    <svg viewBox="0 0 1120 470" role="img" aria-label="Architecture: source data feeds Unity Catalog feature tables, which feed a point-in-time training set and a registered model; that one model version is scored either by fe.score_batch against the offline store, or served by an endpoint reading the Lakebase online store.">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,1 L9,5 L0,9 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <style>
+        .bx{fill:var(--card);stroke:var(--rule);stroke-width:1.2}
+        .lb{font:600 11.5px "Public Sans",sans-serif;fill:var(--ink)}
+        .ls{font:400 10px "IBM Plex Mono",monospace;fill:var(--ink-3)}
+        .zn{fill:none;stroke-width:1.4;stroke-dasharray:5 4}
+        .zt{font:600 10px "IBM Plex Mono",monospace;letter-spacing:.09em}
+        .ed{stroke-width:1.6;fill:none}
+        .et{font:400 9.5px "IBM Plex Mono",monospace;fill:var(--ink-3)}
+      </style>
+
+      <!-- zones -->
+      <rect class="zn" x="8" y="34" width="196" height="200" rx="9" stroke="var(--ink-3)"/>
+      <text class="zt" x="16" y="26" fill="var(--ink-3)">SOURCE — YOU BUILD</text>
+
+      <rect class="zn" x="228" y="34" width="238" height="288" rx="9" stroke="var(--online)"/>
+      <text class="zt" x="236" y="26" fill="var(--online)">UC FEATURE TABLES (OFFLINE DELTA)</text>
+
+      <rect class="zn" x="490" y="34" width="200" height="200" rx="9" stroke="var(--accent)"/>
+      <text class="zt" x="498" y="26" fill="var(--accent)">TRAIN + REGISTER</text>
+
+      <rect x="714" y="34" width="396" height="126" rx="9" class="zn" stroke="var(--batch)" stroke-dasharray="0"/>
+      <text class="zt" x="722" y="26" fill="var(--batch)">PHASE 1 — BATCH · NO ONLINE STORE</text>
+
+      <rect x="714" y="188" width="396" height="134" rx="9" class="zn" stroke="var(--online)" stroke-dasharray="0"/>
+      <text class="zt" x="722" y="180" fill="var(--online)">PHASE 2 — REAL TIME · WHEN LAKEBASE LANDS</text>
+
+      <!-- source boxes -->
+      <rect class="bx" x="20" y="48" width="172" height="42" rx="6"/>
+      <text class="lb" x="32" y="66">engagement_events</text>
+      <text class="ls" x="32" y="80">plays · skips · completes</text>
+
+      <rect class="bx" x="20" y="100" width="172" height="52" rx="6" stroke="var(--warn)"/>
+      <text class="lb" x="32" y="118">rail_impressions</text>
+      <text class="ls" x="32" y="132">363,351 — with</text>
+      <text class="ls" x="32" y="144">RENDERED POSITION</text>
+
+      <rect class="bx" x="20" y="162" width="172" height="42" rx="6"/>
+      <text class="lb" x="32" y="180">titles · collections</text>
+      <text class="ls" x="32" y="194">132 titles · 16 rails</text>
+
+      <text class="ls" x="20" y="222" fill="var(--warn)">no position, no ranking</text>
+
+      <!-- feature tables -->
+      <text class="zt" x="240" y="52" fill="var(--batch)">SHARED, UNCHANGED</text>
+      <rect class="bx" x="240" y="58" width="214" height="21" rx="4" fill="var(--batch-soft)" stroke="var(--batch)"/>
+      <text class="ls" x="248" y="72" fill="var(--ink)">viewer_features_current</text>
+      <rect class="bx" x="240" y="83" width="214" height="21" rx="4" fill="var(--batch-soft)" stroke="var(--batch)"/>
+      <text class="ls" x="248" y="97" fill="var(--ink)">recent_behavior_current</text>
+      <rect class="bx" x="240" y="108" width="214" height="21" rx="4" fill="var(--batch-soft)" stroke="var(--batch)"/>
+      <text class="ls" x="248" y="122" fill="var(--ink)">session_features_current</text>
+      <rect class="bx" x="240" y="133" width="214" height="21" rx="4" fill="var(--batch-soft)" stroke="var(--batch)"/>
+      <text class="ls" x="248" y="147" fill="var(--ink)">title_features → agg to rail</text>
+
+      <text class="zt" x="240" y="176" fill="var(--gap)">NEW — THE WHOLE COST</text>
+      <rect class="bx" x="240" y="182" width="214" height="21" rx="4" fill="var(--gap-soft)" stroke="var(--gap)"/>
+      <text class="ls" x="248" y="196" fill="var(--ink)">rail_features · 16 rows</text>
+      <rect class="bx" x="240" y="207" width="214" height="34" rx="4" fill="var(--gap-soft)" stroke="var(--gap)"/>
+      <text class="ls" x="248" y="221" fill="var(--ink)">viewer_rail_features_ts</text>
+      <text class="ls" x="248" y="234">time series · 463,419 rows</text>
+
+      <rect class="bx" x="240" y="252" width="214" height="34" rx="4" stroke-dasharray="4 3"/>
+      <text class="ls" x="248" y="266" fill="var(--ink)">5 request-time UC UDFs</text>
+      <text class="ls" x="248" y="279">2 shared with horizontal</text>
+
+      <text class="ls" x="240" y="304">one table: PIT offline,</text>
+      <text class="ls" x="240" y="316">latest-per-key online</text>
+
+      <!-- train -->
+      <rect class="bx" x="502" y="48" width="176" height="46" rx="6"/>
+      <text class="lb" x="512" y="66">create_training_set</text>
+      <text class="ls" x="512" y="80">4 lookups + 5 functions, PIT</text>
+
+      <rect class="bx" x="502" y="104" width="176" height="38" rx="6" stroke="var(--warn)"/>
+      <text class="lb" x="512" y="121">IPS position-bias fix</text>
+      <text class="ls" x="512" y="134">80,494 training rows</text>
+
+      <rect x="502" y="152" width="176" height="62" rx="6" fill="var(--accent)" stroke="var(--accent)"/>
+      <text x="512" y="170" font="600 11.5px sans-serif" style="font:600 11.5px 'Public Sans',sans-serif" fill="#fff">UC Model Registry</text>
+      <text x="512" y="184" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">rail_ranker v12 @champion</text>
+      <text x="512" y="197" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">spec logged INSIDE model</text>
+      <text x="512" y="209" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">NDCG@5 +5.70%</text>
+      <text class="ls" x="502" y="252" fill="var(--accent)">one registered version</text>
+      <text class="ls" x="502" y="264" fill="var(--accent)">feeds BOTH paths below</text>
+
+      <!-- phase 1 -->
+      <rect class="bx" x="726" y="52" width="180" height="46" rx="6" stroke="var(--batch)"/>
+      <text class="lb" x="736" y="70">fe.score_batch()</text>
+      <text class="ls" x="736" y="84">same spec, OFFLINE store</text>
+
+      <rect class="bx" x="922" y="52" width="176" height="46" rx="6" stroke="var(--batch)"/>
+      <text class="lb" x="932" y="70">rail_rankings_batch</text>
+      <text class="ls" x="932" y="84">4,628 rows · 69.9 s</text>
+
+      <rect class="bx" x="726" y="106" width="372" height="40" rx="6" stroke="var(--batch)" stroke-dasharray="4 3"/>
+      <text class="ls" x="736" y="122" fill="var(--ink)">Change Data Feed: rescore only changed viewers</text>
+      <text class="ls" x="736" y="136">replaceWhere keeps the rest · minutes cadence</text>
+
+      <!-- phase 2 -->
+      <rect class="bx" x="726" y="204" width="180" height="46" rx="6" stroke="var(--online)"/>
+      <text class="lb" x="736" y="222">publish_table()</text>
+      <text class="ls" x="736" y="236">463,419 → 4,681 rows</text>
+
+      <rect class="bx" x="922" y="204" width="176" height="46" rx="6" fill="var(--online-soft)" stroke="var(--online)"/>
+      <text class="lb" x="932" y="222">Lakebase online store</text>
+      <text class="ls" x="932" y="236">CU_1 · always on</text>
+
+      <rect x="726" y="258" width="372" height="52" rx="6" fill="var(--online)" stroke="var(--online)"/>
+      <text x="736" y="276" style="font:600 11.5px 'Public Sans',sans-serif" fill="#fff">crunchyroll-rail-ranker endpoint</text>
+      <text x="736" y="291" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">7 request fields in → 45 feature values resolved server-side</text>
+      <text x="736" y="304" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">p50 51 ms · p95 66 ms · flat 4→32 collections</text>
+
+      <!-- consumer -->
+      <rect class="bx" x="380" y="386" width="360" height="52" rx="6" stroke="var(--gap)" stroke-width="1.6"/>
+      <text class="lb" x="392" y="404">Crunchyroll homepage service</text>
+      <text class="ls" x="392" y="418">SELECT in Phase 1 · POST in Phase 2</text>
+      <text class="ls" x="392" y="431" fill="var(--gap)">needs a fallback order — endpoint sheds load with 429</text>
+
+      <!-- proof -->
+      <rect x="768" y="366" width="342" height="82" rx="8" fill="var(--batch)" stroke="var(--batch)"/>
+      <text x="782" y="388" style="font:800 12px 'Bricolage Grotesque',sans-serif" fill="#fff">MEASURED — THE TWO PATHS AGREE</text>
+      <text x="782" y="406" style="font:400 10.5px 'IBM Plex Mono',monospace" fill="#fff">same viewer · same collections · same context · v11</text>
+      <text x="782" y="421" style="font:400 10.5px 'IBM Plex Mono',monospace" fill="#fff">16 of 16 identical rank · Spearman 1.0</text>
+      <text x="782" y="436" style="font:400 10.5px 'IBM Plex Mono',monospace" fill="#fff">max |Δp| 0.0026 = the clock, not a bug</text>
+
+      <!-- edges -->
+      <g color="var(--ink-3)" stroke="var(--ink-3)">
+        <path class="ed" d="M192,69 L216,69 L216,68 L240,68" marker-end="url(#ar)"/>
+        <path class="ed" d="M192,183 L216,183 L216,192 L240,192" marker-end="url(#ar)"/>
+      </g>
+      <g color="var(--warn)" stroke="var(--warn)">
+        <path class="ed" d="M192,126 L214,126 L214,224 L240,224" marker-end="url(#ar)"/>
+      </g>
+      <g color="var(--accent)" stroke="var(--accent)">
+        <path class="ed" d="M454,120 L478,120 L478,71 L502,71" marker-end="url(#ar)"/>
+        <text class="et" x="470" y="100" fill="var(--accent)">declarative</text>
+        <path class="ed" d="M590,94 L590,104" marker-end="url(#ar)"/>
+        <path class="ed" d="M590,142 L590,152" marker-end="url(#ar)"/>
+      </g>
+      <g color="var(--batch)" stroke="var(--batch)">
+        <path class="ed" d="M678,168 L706,168 L706,75 L726,75" stroke-width="2.4" marker-end="url(#ar)"/>
+        <path class="ed" d="M906,75 L922,75" marker-end="url(#ar)"/>
+        <path class="ed" d="M912,106 L912,98" marker-end="url(#ar)"/>
+        <path class="ed" d="M1098,75 L1106,75 L1106,352 L742,352 L742,394" marker-end="url(#ar)"/>
+        <text class="et" x="756" y="348" fill="var(--batch)">Phase 1: SELECT</text>
+      </g>
+      <g color="var(--online)" stroke="var(--online)">
+        <path class="ed" d="M678,196 L694,196 L694,282 L726,282" stroke-width="2.4" marker-end="url(#ar)"/>
+        <path class="ed" d="M454,269 L482,269 L482,366 L688,366 L688,227 L726,227" marker-end="url(#ar)"/>
+        <text class="et" x="492" y="362" fill="var(--online)">publish</text>
+        <path class="ed" d="M906,227 L922,227" marker-end="url(#ar)"/>
+        <path class="ed" d="M1010,250 L1010,258" marker-end="url(#ar)"/>
+        <path class="ed" d="M726,296 L712,296 L712,424 L740,424" marker-end="url(#ar)"/>
+        <text class="et" x="646" y="378" fill="var(--online)">Phase 2: POST</text>
+      </g>
+      <g color="var(--batch)" stroke="var(--batch)">
+        <path class="ed" d="M454,224 L466,224 L466,328 L720,328 L720,75 L726,75" stroke-dasharray="0"/>
+        <text class="et" x="474" y="324" fill="var(--batch)">offline read</text>
+      </g>
+    </svg>
+  </div>
+  <p class="small">
+    Editable source: <span class="mono">docs/architecture.drawio</span>. The only difference
+    between the two phases is the box the arrow from the registry lands in — and where features
+    are read from.
+  </p>
+</section>
+
+<!-- 4 ................................................................. -->
+<section class="slide" id="s4">
+  <div class="eyebrow"><span>03</span><span>Ask 1 — shared feature store</span></div>
+  <h2>Four of six inputs were already there</h2>
+  <div class="tbl-scroll">
+    <table>
+      <thead><tr><th>Feature table</th><th>Grain</th><th>Offline</th><th>Online</th><th>Second ranker</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">viewer_features_current</td><td>viewer</td><td>daily</td><td>yes</td><td><span class="pill reuse">reused unchanged</span></td></tr>
+        <tr><td class="mono">recent_behavior_current</td><td>viewer</td><td>triggered</td><td>yes</td><td><span class="pill reuse">reused unchanged</span></td></tr>
+        <tr><td class="mono">session_features_current</td><td>viewer</td><td>streaming</td><td>CONTINUOUS</td><td><span class="pill reuse">reused unchanged</span></td></tr>
+        <tr><td class="mono">title_features</td><td>title</td><td>daily</td><td>yes</td><td><span class="pill reuse">aggregated to rail grain</span></td></tr>
+        <tr><td class="mono">rail_features</td><td>collection</td><td>daily</td><td>yes</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">viewer_rail_features_ts</td><td>viewer × collection × ts</td><td>daily snapshots</td><td>latest per key</td><td><span class="pill new">new</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="cols">
+    <div class="card plain">
+      <h3>Training–serving consistency, structurally</h3>
+      <p class="small">The feature spec is logged <strong>inside</strong> the model, so the endpoint
+      performs the same lookups and the same UDFs as training. Not a convention anyone has to
+      honour — there is no second code path to keep in sync.</p>
+    </div>
+    <div class="card plain">
+      <h3>Eligibility is a filter, never a feature</h3>
+      <p class="small">Four collections depend on viewer state, so the eligible set genuinely varies
+      <strong>14–16</strong> per request (mean 15.4). It is applied before scoring, exactly where
+      your service would apply it.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 5 ................................................................. -->
+<section class="slide" id="s5">
+  <div class="eyebrow"><span>04</span><span>The time series table</span></div>
+  <h2>One table, not two — point-in-time offline, latest-per-key online</h2>
+  <div class="cols-2">
+    <div>
+      <p class="lede">Registering <span class="mono">viewer_rail_features_ts</span> with
+      <span class="mono">timeseries_columns="ts"</span> makes one table do both jobs. Offline it
+      keeps every daily snapshot, so training reads only what was known at impression time.
+      Published online, it deduplicates to the newest row per key.</p>
+      <p class="small" style="margin-top:14px">So there is no <span class="mono">_current</span>
+      mirror to keep in sync. Training and serving read the same table through the same
+      <span class="mono">FeatureLookup</span> — the strongest available form of the consistency
+      argument: not "two tables from one definition", but one table.</p>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>463,419</b><span>offline rows — every daily snapshot</span></div>
+      <div class="stat o"><b>4,681</b><span>online rows — one per (viewer, collection)</span></div>
+      <div class="stat"><b>99×</b><span>compression the time series designation buys</span></div>
+      <div class="stat b"><b>end&nbsp;of&nbsp;day</b><span>snapshot stamp — a training row cannot read same-day clicks</span></div>
+    </div>
+  </div>
+  <p class="small">Asserted in the pipeline, not assumed: the run fails loudly if online row count
+  ≠ distinct keys, because every claim about the serving path depends on it.</p>
+</section>
+
+<!-- 6 ................................................................. -->
+<section class="slide" id="s6">
+  <div class="eyebrow"><span>05</span><span>Ask 2 — model lifecycle</span></div>
+  <h2>Trained from the store, corrected for position bias, registered in Unity Catalog</h2>
+  <div class="cols-2">
+    <div class="card">
+      <h3>Model version 12 · <span class="mono">@champion</span></h3>
+      <dl class="kv">
+        <dt>NDCG@5, ranker</dt><dd>0.6978</dd>
+        <dt>NDCG@5, incumbent editorial</dt><dd>0.6602</dd>
+        <dt>relative lift</dt><dd>+5.70%</dd>
+        <dt>MRR</dt><dd>0.7016 vs 0.6590</dd>
+        <dt>holdout AUC, viewed</dt><dd>0.6319</dd>
+        <dt>holdout</dt><dd>524 sessions · 9,663 rows</dd>
+        <dt>training rows</dt><dd>80,494</dd>
+        <dt>registry tag</dt><dd>position_bias_correction=ips</dd>
+      </dl>
+    </div>
+    <div>
+      <h3>Position bias is not optional here</h3>
+      <p class="small">Every label in a homepage log was observed at a position the
+      <em>incumbent</em> chose. An uncorrected model learns the incumbent and scores well for it.
+      Inverse propensity weights come from <span class="mono">rail_position_propensity</span>.
+      Without this, the lift above would be an artifact rather than a result.</p>
+      <h3 style="margin-top:16px">The ablation answers the obvious objection</h3>
+      <p class="small">"Is the lift personalization, or just a better <em>fixed</em> order?"
+      Removing all 13 collection-identity features moves NDCG@5 from
+      <strong>0.6978 to 0.7067</strong> — it does not drop. Spearman(full, ablated) 0.931, so the
+      two models genuinely differ. <strong>The lift is personalization.</strong></p>
+    </div>
+  </div>
+  <p class="small">Point-in-time correctness via <span class="mono">timestamp_lookup_key</span>,
+  verified with an isolated probe job before the architecture was chosen. Versions are integers,
+  promotion is an alias move, deployment pins the immutable version — two separate steps.</p>
+</section>
+
+<!-- 7 ................................................................. -->
+<section class="slide" id="s7">
+  <div class="eyebrow"><span class="tag batch">Phase 1</span><span>Your November deliverable</span></div>
+  <h2>Batch scoring, with no online store anywhere in the path</h2>
+  <p class="lede">Lakebase is not in GCP us-west1 until November. <span class="mono">fe.score_batch()</span>
+  resolves the same four feature tables and five UDFs against the <strong>offline</strong> store, so
+  nothing on this path depends on Lakebase existing.</p>
+  <div class="stats">
+    <div class="stat b"><b>4,628</b><span>rows scored — 300 viewers × 14–16 collections</span></div>
+    <div class="stat b"><b>69.9 s</b><span>score_batch + materialisation</span></div>
+    <div class="stat b"><b>2.9 s</b><span>write of the ranked table</span></div>
+    <div class="stat b"><b>v11</b><span>the version the endpoint served when measured</span></div>
+  </div>
+  <div class="cols-2">
+    <div class="card plain">
+      <h3>What does not extrapolate</h3>
+      <p class="small">69.9 s for 4,628 rows is dominated by Spark startup on serverless, not
+      per-row work. We are not offering it as a capacity model. What transfers is the shape: a
+      full refresh is <span class="mono">O(viewers × collections)</span>; an incremental refresh
+      is <span class="mono">O(viewers whose features changed)</span>. At a minutes cadence only
+      the second is viable.</p>
+    </div>
+    <div class="card batch">
+      <h3>Change Data Feed makes minutes possible</h3>
+      <p class="small">CDF is enabled on all four feature tables, so "whose features moved since
+      the last run" is a query, not a guess. Read each change feed from the last scored version,
+      rescore only those viewers, write with <span class="mono">replaceWhere</span> so the rest of
+      the table stands.</p>
+      <p class="small" style="margin-top:8px"><strong>One honest asymmetry:</strong>
+      <span class="mono">rail_features</span> is keyed by <span class="mono">rail_id</span>, so any
+      change to it moves every viewer's order and forces a full refresh. The job detects that and
+      says so rather than shipping a half-stale table.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 8 ................................................................. -->
+<section class="slide" id="s8">
+  <div class="eyebrow"><span class="tag online">Phase 2</span><span>Your end goal</span></div>
+  <h2>The endpoint does the lookups — your service sends seven fields</h2>
+  <div class="cols-2">
+    <figure>
+      <img src="img/app_vertical.png" alt="The demo app showing 16 collections ranked for viewer v0001 on TV at 21:00, with the probability per collection, the positions each moved against the editorial order, and the seven-field request body.">
+      <figcaption>Live, 18 Sep 2026. 16 collections ranked in one call for viewer <span class="mono">v0001</span>.</figcaption>
+    </figure>
+    <div>
+      <div class="stats" style="grid-template-columns:1fr 1fr">
+        <div class="stat o"><b>7</b><span>request fields the caller sends</span></div>
+        <div class="stat o"><b>45</b><span>feature values resolved server-side</span></div>
+        <div class="stat o"><b>4 + 5</b><span>feature tables + request-time UDFs</span></div>
+        <div class="stat o"><b>47</b><span>features the model scores on</span></div>
+      </div>
+      <p class="small" style="margin-top:14px">45 is what the endpoint retrieves; 47 is what the
+      estimator sees — 43 of those retrieved values plus the 4 context fields the caller sends. Two
+      retrieved values are UDF inputs only and never reach the estimator.</p>
+      <p class="small" style="margin-top:10px">The homepage service does not fetch features and does
+      not know which tables exist. It sends a viewer, a context and the eligible collections.
+      Everything else is the endpoint's job, because the feature spec lives inside the model.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 9 ................................................................. -->
+<section class="slide" id="s9">
+  <div class="eyebrow"><span>06</span><span>The closing argument</span></div>
+  <h2>Batch and online produced the identical collection order</h2>
+  <p class="lede">Same viewer, same collections, same context, same model version — scored through
+  <span class="mono">score_batch</span> and through the endpoint, then compared.</p>
+  <div class="stats">
+    <div class="stat b"><b>16</b><span>collections compared</span></div>
+    <div class="stat b"><b>16 / 16</b><span>at identical rank</span></div>
+    <div class="stat b"><b>1.0</b><span>Spearman(batch, online)</span></div>
+    <div class="stat w"><b>0.0026</b><span>max absolute probability difference</span></div>
+  </div>
+  <div class="card">
+    <h3>Why the probabilities differ slightly, and why that is correct</h3>
+    <p class="small">The delta is not noise and not a bug.
+    <span class="mono">cr_rail_click_recency</span> takes <span class="mono">request_epoch_s</span>
+    as an input, and the batch job and the endpoint call happened seconds apart. A time-decay
+    feature <em>should</em> return a different value at a different clock. Ranks are unaffected
+    because every collection in the request shifts by the same clock.
+    <strong>If this number were zero, the recency feature would not be doing its job.</strong></p>
+  </div>
+  <p class="lede">So the November work is not throwaway. Switching to real time is a deployment
+  change, not a modelling change — and <strong>the ranking does not need re-validating.</strong></p>
+</section>
+
+<!-- 10 ................................................................ -->
+<section class="slide" id="s10">
+  <div class="eyebrow"><span class="tag gap">The honest cost</span><span>What batch cannot do</span></div>
+  <h2>Request-time context alone reorders up to 12 of 16 collections</h2>
+  <div class="cols-2">
+    <div>
+      <p class="lede">Five of the model's features are request-time UDFs reading
+      <span class="mono">device</span>, <span class="mono">hour_of_day</span> and
+      <span class="mono">request_epoch_s</span> — none of which exist until a request arrives. A
+      precomputed table has to pick one context and be wrong for the others.</p>
+      <div class="tbl-scroll" style="margin-top:14px">
+        <table>
+          <thead><tr><th>Context</th><th>Collections that move</th></tr></thead>
+          <tbody>
+            <tr><td>09:00 on TV</td><td class="num">5&ndash;6 of 16</td></tr>
+            <tr><td>21:00 on mobile</td><td class="num">7&ndash;12 of 16</td></tr>
+            <tr><td>09:00 on mobile</td><td class="num">9 of 16</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small" style="margin-top:9px">All against the 21:00-on-TV order, same viewer,
+      nothing in the feature store changing. Measured live across several runs on 18 Sep 2026 &mdash;
+      the count itself shifts with the wall clock, because two of the five request-time features
+      decay with time. <strong>The app prints the exact count for the run you are watching.</strong></p>
+      <p class="small" style="margin-top:10px"><strong>So the Phase 2 argument is not primarily
+      latency.</strong> It is personalization that a precomputed table structurally cannot deliver.
+      Precomputing every context instead multiplies the table by the number of contexts — the
+      expensive direction at a minutes cadence.</p>
+    </div>
+    <figure>
+      <img src="img/app_four_contexts.png" alt="The app scoring the same viewer in four contexts side by side, with a rank column per context, showing that 09:00 TV moves 6 rails, 21:00 mobile moves 12 and 09:00 mobile moves 9.">
+      <figcaption>One captured run: 6, 12 and 9. The app recomputes it on every load and prints
+      the count — a column of zeros would fail the demo loudly.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- 11 ................................................................ -->
+<section class="slide" id="s11">
+  <div class="eyebrow"><span>07</span><span>Ask 4 — production serving</span></div>
+  <h2>Latency is flat in request size; throughput is not one number</h2>
+  <div class="cols-2">
+    <div class="figbox">
+      <svg viewBox="0 0 480 260" role="img" aria-label="Chart: endpoint p50 latency against candidate collections per request, showing 55.1 ms at 1 collection then flat between 50 and 52 ms from 4 to 32 collections.">
+        <style>
+          .ax{stroke:var(--rule);stroke-width:1}
+          .gl{stroke:var(--rule);stroke-width:1;stroke-dasharray:3 4}
+          .tk{font:400 10px "IBM Plex Mono",monospace;fill:var(--ink-3)}
+          .vl{font:600 10px "IBM Plex Mono",monospace;fill:var(--online)}
+          .ttl{font:600 11px "Public Sans",sans-serif;fill:var(--ink)}
+        </style>
+
+        <text class="ttl" x="8" y="16">Endpoint p50, ms — by collections per request</text>
+        <!-- y grid at 0,25,50,75,100 -->
+        <g>
+          <line class="gl" x1="52" y1="210" x2="466" y2="210"/><text class="tk" x="24" y="214">0</text>
+          <line class="gl" x1="52" y1="170" x2="466" y2="170"/><text class="tk" x="18" y="174">25</text>
+          <line class="gl" x1="52" y1="130" x2="466" y2="130"/><text class="tk" x="18" y="134">50</text>
+          <line class="gl" x1="52" y1="90"  x2="466" y2="90"/><text class="tk" x="18" y="94">75</text>
+          <line class="gl" x1="52" y1="50"  x2="466" y2="50"/><text class="tk" x="12" y="54">100</text>
+        </g>
+        <line class="ax" x1="52" y1="210" x2="466" y2="210"/>
+        <line class="ax" x1="52" y1="42"  x2="52"  y2="210"/>
+        <!-- bars: value -> y = 210 - v*1.6 ; 55.1->121.8, 51.4->127.8, 50.6->129.0, 50.5->129.2, 50.0->130 (v12, 2026-09-24) -->
+        <g>
+          <rect x="74"  y="121.8" width="52" height="88.2"  rx="3" fill="var(--warn)"/>
+          <text class="vl" x="76" y="115" fill="var(--warn)">55.1</text>
+          <text class="tk" x="94" y="226">1</text>
+
+          <rect x="150" y="127.8" width="52" height="82.2"  rx="3" fill="var(--online)"/>
+          <text class="vl" x="152" y="121">51.4</text>
+          <text class="tk" x="170" y="226">4</text>
+
+          <rect x="226" y="129.0" width="52" height="81.0"  rx="3" fill="var(--online)"/>
+          <text class="vl" x="228" y="122">50.6</text>
+          <text class="tk" x="246" y="226">8</text>
+
+          <rect x="302" y="129.2" width="52" height="80.8"  rx="3" fill="var(--online)"/>
+          <text class="vl" x="304" y="122">50.5</text>
+          <text class="tk" x="318" y="226">16</text>
+
+          <rect x="378" y="130" width="52" height="80"  rx="3" fill="var(--online)"/>
+          <text class="vl" x="380" y="123">50.0</text>
+          <text class="tk" x="394" y="226">32</text>
+        </g>
+        <text class="tk" x="52" y="246">collections per request — flat from 4 to 32</text>
+        <text class="tk" x="74" y="256" fill="var(--warn)">1-collection bar is first-shape cost, not fanout</text>
+      </svg>
+      <p class="chart-note">32 collections cost the same as 4, so the automatic feature lookup
+      <strong>batches</strong> the per-collection reads rather than issuing them serially. Three
+      independent runs agree, including one from a different network position. Bars: v12, 24 Sep 2026.</p>
+    </div>
+    <div>
+      <div class="stats" style="grid-template-columns:1fr 1fr">
+        <div class="stat o"><b>51 / 66</b><span>p50 / p95 ms, low concurrency, 12 collections</span></div>
+        <div class="stat o"><b>~34 ms</b><span>the feature-lookup share, measured directly</span></div>
+        <div class="stat w"><b>429</b><span>what you get past capacity — not unbounded queueing</span></div>
+        <div class="stat g"><b>10,157</b><span>of 15,395 rejected in a 2→48 concurrency spike</span></div>
+      </div>
+      <h3 style="margin-top:16px">Throughput, stated honestly</h3>
+      <p class="small">At concurrency 32 the latest 10-minute sustained hold started at
+      <strong>83.9 req/s</strong> (p50 315 ms, no rejections, queueing) and reached
+      <strong>~200 req/s</strong> (p50 ~68 ms, excess shed as 429) — 2.4×, 90% of best after
+      <strong>~60 s</strong>. The run before served ~206 req/s from the first 30 s; an earlier pair
+      of sweeps needed ten minutes. How long scale-up takes is <em>not</em> predictable, and we are
+      not claiming a number for it.</p>
+      <p class="small" style="margin-top:10px"><strong>What survives regardless: provision the floor
+      for peak. Do not size against autoscaling.</strong>
+      <span class="mono">min_provisioned_concurrency</span> is what you actually get.</p>
+      <p class="small" style="margin-top:10px">Recovery after the spike is immediate — p50 49.5 ms,
+      p95 61 ms, 15 residual 429s. No queue to drain, no lasting damage.</p>
+    </div>
+  </div>
+  <p class="small">Measured from two vantage points on purpose: a laptop saturates at 53.8 req/s and
+  therefore sees <strong>zero</strong> 429s in the same spike that rejects thousands in region.
+  Benchmarking a serving endpoint from outside its region overstates headroom by roughly 4×.</p>
+</section>
+
+<!-- 12 ................................................................ -->
+<section class="slide" id="s12">
+  <div class="eyebrow"><span>08</span><span>Scope, stated before you ask</span></div>
+  <h2>What we are not claiming</h2>
+  <div class="tbl-scroll">
+    <table>
+      <thead><tr><th>Item</th><th>Status</th><th>Detail</th></tr></thead>
+      <tbody>
+        <tr><td>Scale at your cardinality</td><td><span class="pill no">not demonstrated</span></td><td>4,681 online keys is not 50 million. Top follow-up.</td></tr>
+        <tr><td>Training at your volume</td><td><span class="pill part">partial</span></td><td>The PIT join is Spark and scales; the estimator is <span class="mono">toPandas()</span> + scikit-learn, single-driver. Substitution named; touches neither the feature layer nor serving.</td></tr>
+        <tr><td>Fallback path</td><td><span class="pill no">not built</span></td><td>No cached previous ranking, no editorial default on timeout, no circuit breaker. Given the endpoint sheds load with 429, <strong>this is the most important thing you must build.</strong></td></tr>
+        <tr><td>Canary / traffic split</td><td><span class="pill no">not built</span></td><td>Model Serving supports it; this POC sends 100% to one version.</td></tr>
+        <tr><td>Handoff to the homepage</td><td><span class="pill part">yours to decide</span></td><td>Query <span class="mono">rail_rankings_batch</span> directly, or populate your own cache from it. Changes the freshness contract — worth settling before November.</td></tr>
+        <tr><td>Minutes cadence at your MAU</td><td><span class="pill part">unsized</span></td><td>Mechanism exists, measured at demo scale only. Needs your MAU and feature-change rate.</td></tr>
+        <tr><td>Route optimization</td><td><span class="pill part">blocked here</span></td><td>Rejected by this workspace. Ours to escalate, not a platform limit.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="cols">
+    <div class="card plain">
+      <h3>Databricks provides</h3>
+      <p class="small">Feature plumbing, the point-in-time join, the online store, automatic feature
+      lookup at serving, the registry, the endpoint, batch scoring against the offline store.</p>
+    </div>
+    <div class="card plain">
+      <h3>Crunchyroll builds</h3>
+      <p class="small">Feature definitions, <strong>the homepage impression log including rendered
+      position</strong>, eligibility rules, candidate resolution for personalized collections, the
+      homepage service and its fallbacks.</p>
+    </div>
+    <div class="card plain">
+      <h3>Crunchyroll operates</h3>
+      <p class="small">Freshness, capacity, retraining cadence, cost. The online store is the one
+      component that cannot scale to zero — $15.95/day at CU_2 list, measured; this demo runs CU_1.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 13 ................................................................ -->
+<section class="slide" id="s13">
+  <div class="eyebrow"><span>09</span><span>Running order</span></div>
+  <h2>What we will show, in order</h2>
+  <div class="tbl-scroll">
+    <table>
+      <thead><tr><th>#</th><th>Act</th><th>Artifact</th><th>Min</th></tr></thead>
+      <tbody>
+        <tr><td class="num">0</td><td>Frame the two rankings</td><td>slides</td><td class="num">2</td></tr>
+        <tr><td class="num">1</td><td>The shared feature store</td><td>notebook 21 output</td><td class="num">8</td></tr>
+        <tr><td class="num">2</td><td>Training, PIT, IPS, registry</td><td>notebook 22 + UC model page</td><td class="num">6</td></tr>
+        <tr><td class="num">3</td><td><strong>Batch — the November path</strong></td><td>notebook 26 + <span class="mono">rail_rankings_batch</span></td><td class="num">12</td></tr>
+        <tr><td class="num">4</td><td>Online — the end goal</td><td>the app</td><td class="num">10</td></tr>
+        <tr><td class="num">5</td><td><strong>Batch = online, proved</strong></td><td>notebook 26, last section</td><td class="num">5</td></tr>
+        <tr><td class="num">6</td><td>Serving numbers under load</td><td><span class="mono">docs/serving_benchmark.md</span></td><td class="num">7</td></tr>
+        <tr><td class="num">7</td><td>Gaps and ownership split</td><td>slides</td><td class="num">5</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="cols-2">
+    <div class="card gapc">
+      <h3>Two live-demo hazards</h3>
+      <ul class="clean small">
+        <li>An unknown <span class="mono">rail_id</span> returns <span class="mono">Error ''</span> from
+        the endpoint, not a useful message. Use the app's picker, never hand-typed ids.</li>
+        <li>The batch path has no UI — have the <span class="mono">rail_rankings_batch</span> query
+        open in a tab before the call.</li>
+      </ul>
+    </div>
+    <div class="card plain">
+      <h3>The sentence to land first</h3>
+      <p class="small">"Yes, both — and they are the same model. We ran batch and real time against
+      the same registered version and compared them: identical collection order, 16 of 16,
+      Spearman 1.0."</p>
+    </div>
+  </div>
+  <p class="footnote">
+    Full detail: <span class="mono">docs/ask_alignment.md</span> (line-by-line against your written
+    ask) · <span class="mono">docs/batch_and_online.md</span> (the migration) ·
+    <span class="mono">docs/serving_benchmark.md</span> (all load-test tables) ·
+    <span class="mono">docs/verification_log.md</span> (66 checks, most of them defects a live run
+    surfaced) · <span class="mono">docs/demo_script.md</span> (this running order, expanded).
+  </p>
+</section>
+
+</div>
+
+<script>
+(function(){
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var counter = document.getElementById('counter');
+  var bar = document.getElementById('bar');
+  var cur = 0;
+
+  function paint(i){
+    cur = Math.max(0, Math.min(slides.length - 1, i));
+    counter.textContent = (cur + 1) + ' / ' + slides.length;
+    bar.style.width = ((cur + 1) / slides.length * 100) + '%';
+  }
+  function go(i){
+    var t = Math.max(0, Math.min(slides.length - 1, i));
+    slides[t].scrollIntoView({block:'start'});
+    paint(t);
+  }
+
+  document.getElementById('prev').addEventListener('click', function(){ go(cur - 1); });
+  document.getElementById('next').addEventListener('click', function(){ go(cur + 1); });
+
+  document.addEventListener('keydown', function(e){
+    if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+    if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { e.preventDefault(); go(cur + 1); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); go(cur - 1); }
+    else if (e.key === 'Home') { e.preventDefault(); go(0); }
+    else if (e.key === 'End') { e.preventDefault(); go(slides.length - 1); }
+  });
+
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if (en.isIntersecting) paint(slides.indexOf(en.target));
+      });
+    }, {threshold:0.5});
+    slides.forEach(function(s){ io.observe(s); });
+  }
+  paint(0);
+})();
+</script>
