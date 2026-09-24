@@ -10,7 +10,7 @@ definitions, the training set, the registered model and the ranking logic are th
 objects. What changes is one API call and where features are read from. Batch and online
 produced the **identical collection order** for the same viewer.
 
-Everything below is measured in `serverless_lakebase_praneeth_catalog.crunchyroll_demo`,
+Everything below is measured in `<catalog>.crunchyroll_demo`,
 not estimated.
 
 ---
@@ -23,7 +23,7 @@ not estimated.
 | how | `fe.score_batch(model_uri, df)` | `POST /serving-endpoints/…/invocations` |
 | feature definitions | `src/crfs/features.py`, `rails.py` | **identical** |
 | feature spec | embedded in the model | **identical** |
-| model | `crunchyroll_rail_ranker` v10 `@champion` | **identical version** |
+| model | `crunchyroll_rail_ranker` `@champion` (v10 when this was measured) | **identical version** |
 | lookups performed | 4 feature tables + 5 UC Python UDFs | **the same 4 + 5** |
 | ranking logic | window over the scored frame | same ranking inside the pyfunc |
 | context features | fixed at scoring time | evaluated per request |

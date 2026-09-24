@@ -226,7 +226,7 @@ html{scroll-behavior:smooth}
 <div class="rail">
   <div class="rail-in">
     <span class="brandmark">Databricks&nbsp;·&nbsp;POC readout</span>
-    <span class="rail-meta">model v11 @champion · verified 2026-09-18</span>
+    <span class="rail-meta">model v12 @champion · verified 2026-09-24</span>
     <span class="rail-nav">
       <button id="prev" type="button" aria-label="Previous slide">←</button>
       <span id="counter">1 / 13</span>
@@ -250,13 +250,13 @@ html{scroll-behavior:smooth}
   <div class="stats">
     <div class="stat b"><b>16 / 16</b><span>collections at identical rank, batch vs online</span></div>
     <div class="stat b"><b>1.0</b><span>Spearman(batch order, online order)</span></div>
-    <div class="stat o"><b>52 ms</b><span>endpoint p50 in region, 12 collections</span></div>
-    <div class="stat w"><b>+4.29%</b><span>NDCG@5 over the incumbent editorial order</span></div>
+    <div class="stat o"><b>51 ms</b><span>endpoint p50 in region, 12 collections</span></div>
+    <div class="stat w"><b>+5.70%</b><span>NDCG@5 over the incumbent editorial order</span></div>
   </div>
   <p class="small">
-    Every figure in this deck was measured on
-    <span class="mono">serverless_lakebase_praneeth_catalog.crunchyroll_demo</span> against
-    registered model version 11, and re-verified on 18 Sep 2026. Synthetic data — 300 viewers,
+    Model and serving figures were measured on the reference workspace (AWS us-east-1)
+    against registered model version 12 on 24 Sep 2026; the batch-versus-online parity
+    figures against version 11 on 18 Sep 2026. Synthetic data — 300 viewers,
     132 titles, 363,351 homepage impressions. The lift is evidence the pipeline works, not a
     forecast of Crunchyroll's lift.
   </p>
@@ -273,7 +273,7 @@ html{scroll-behavior:smooth}
       <dl class="kv">
         <dt>endpoint</dt><dd>crunchyroll-watch-next-ranker</dd>
         <dt>grain</dt><dd>viewer × title</dd>
-        <dt>status</dt><dd>READY, v9</dd>
+        <dt>status</dt><dd>READY, v15</dd>
       </dl>
     </div>
     <div class="card">
@@ -282,7 +282,7 @@ html{scroll-behavior:smooth}
       <dl class="kv">
         <dt>endpoint</dt><dd>crunchyroll-rail-ranker</dd>
         <dt>grain</dt><dd>viewer × collection</dd>
-        <dt>status</dt><dd>READY, v11 @champion</dd>
+        <dt>status</dt><dd>READY, v12 @champion</dd>
       </dl>
     </div>
   </div>
@@ -379,13 +379,13 @@ html{scroll-behavior:smooth}
 
       <rect class="bx" x="502" y="104" width="176" height="38" rx="6" stroke="var(--warn)"/>
       <text class="lb" x="512" y="121">IPS position-bias fix</text>
-      <text class="ls" x="512" y="134">81,109 training rows</text>
+      <text class="ls" x="512" y="134">80,494 training rows</text>
 
       <rect x="502" y="152" width="176" height="62" rx="6" fill="var(--accent)" stroke="var(--accent)"/>
       <text x="512" y="170" font="600 11.5px sans-serif" style="font:600 11.5px 'Public Sans',sans-serif" fill="#fff">UC Model Registry</text>
-      <text x="512" y="184" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">rail_ranker v11 @champion</text>
+      <text x="512" y="184" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">rail_ranker v12 @champion</text>
       <text x="512" y="197" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">spec logged INSIDE model</text>
-      <text x="512" y="209" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">NDCG@5 +4.29%</text>
+      <text x="512" y="209" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">NDCG@5 +5.70%</text>
       <text class="ls" x="502" y="252" fill="var(--accent)">one registered version</text>
       <text class="ls" x="502" y="264" fill="var(--accent)">feeds BOTH paths below</text>
 
@@ -414,7 +414,7 @@ html{scroll-behavior:smooth}
       <rect x="726" y="258" width="372" height="52" rx="6" fill="var(--online)" stroke="var(--online)"/>
       <text x="736" y="276" style="font:600 11.5px 'Public Sans',sans-serif" fill="#fff">crunchyroll-rail-ranker endpoint</text>
       <text x="736" y="291" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">7 request fields in → 45 feature values resolved server-side</text>
-      <text x="736" y="304" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">p50 52 ms · p95 67 ms · flat 4→32 collections</text>
+      <text x="736" y="304" style="font:400 10px 'IBM Plex Mono',monospace" fill="#fff">p50 51 ms · p95 66 ms · flat 4→32 collections</text>
 
       <!-- consumer -->
       <rect class="bx" x="380" y="386" width="360" height="52" rx="6" stroke="var(--gap)" stroke-width="1.6"/>
@@ -537,15 +537,15 @@ html{scroll-behavior:smooth}
   <h2>Trained from the store, corrected for position bias, registered in Unity Catalog</h2>
   <div class="cols-2">
     <div class="card">
-      <h3>Model version 11 · <span class="mono">@champion</span></h3>
+      <h3>Model version 12 · <span class="mono">@champion</span></h3>
       <dl class="kv">
-        <dt>NDCG@5, ranker</dt><dd>0.6984</dd>
-        <dt>NDCG@5, incumbent editorial</dt><dd>0.6697</dd>
-        <dt>relative lift</dt><dd>+4.29%</dd>
-        <dt>MRR</dt><dd>0.6866 vs 0.6629</dd>
-        <dt>holdout AUC, viewed</dt><dd>0.6331</dd>
-        <dt>holdout</dt><dd>542 sessions · 9,903 rows</dd>
-        <dt>training rows</dt><dd>81,109</dd>
+        <dt>NDCG@5, ranker</dt><dd>0.6978</dd>
+        <dt>NDCG@5, incumbent editorial</dt><dd>0.6602</dd>
+        <dt>relative lift</dt><dd>+5.70%</dd>
+        <dt>MRR</dt><dd>0.7016 vs 0.6590</dd>
+        <dt>holdout AUC, viewed</dt><dd>0.6319</dd>
+        <dt>holdout</dt><dd>524 sessions · 9,663 rows</dd>
+        <dt>training rows</dt><dd>80,494</dd>
         <dt>registry tag</dt><dd>position_bias_correction=ips</dd>
       </dl>
     </div>
@@ -558,7 +558,7 @@ html{scroll-behavior:smooth}
       <h3 style="margin-top:16px">The ablation answers the obvious objection</h3>
       <p class="small">"Is the lift personalization, or just a better <em>fixed</em> order?"
       Removing all 13 collection-identity features moves NDCG@5 from
-      <strong>0.6984 to 0.7026</strong> — it does not drop. Spearman(full, ablated) 0.947, so the
+      <strong>0.6978 to 0.7067</strong> — it does not drop. Spearman(full, ablated) 0.931, so the
       two models genuinely differ. <strong>The lift is personalization.</strong></p>
     </div>
   </div>
@@ -578,7 +578,7 @@ html{scroll-behavior:smooth}
     <div class="stat b"><b>4,628</b><span>rows scored — 300 viewers × 14–16 collections</span></div>
     <div class="stat b"><b>69.9 s</b><span>score_batch + materialisation</span></div>
     <div class="stat b"><b>2.9 s</b><span>write of the ranked table</span></div>
-    <div class="stat b"><b>v11</b><span>same model version the endpoint serves</span></div>
+    <div class="stat b"><b>v11</b><span>the version the endpoint served when measured</span></div>
   </div>
   <div class="cols-2">
     <div class="card plain">
@@ -697,7 +697,7 @@ html{scroll-behavior:smooth}
   <h2>Latency is flat in request size; throughput is not one number</h2>
   <div class="cols-2">
     <div class="figbox">
-      <svg viewBox="0 0 480 260" role="img" aria-label="Chart: endpoint p50 latency against candidate collections per request, showing 79.4 ms at 1 collection then flat between 52 and 56 ms from 4 to 32 collections.">
+      <svg viewBox="0 0 480 260" role="img" aria-label="Chart: endpoint p50 latency against candidate collections per request, showing 55.1 ms at 1 collection then flat between 50 and 52 ms from 4 to 32 collections.">
         <style>
           .ax{stroke:var(--rule);stroke-width:1}
           .gl{stroke:var(--rule);stroke-width:1;stroke-dasharray:3 4}
@@ -717,26 +717,26 @@ html{scroll-behavior:smooth}
         </g>
         <line class="ax" x1="52" y1="210" x2="466" y2="210"/>
         <line class="ax" x1="52" y1="42"  x2="52"  y2="210"/>
-        <!-- bars: value -> y = 210 - v*1.6 ; 79.4->83, 52.2->126.5, 54.8->122.3, 52.7->125.7, 55.8->120.7 -->
+        <!-- bars: value -> y = 210 - v*1.6 ; 55.1->121.8, 51.4->127.8, 50.6->129.0, 50.5->129.2, 50.0->130 (v12, 2026-09-24) -->
         <g>
-          <rect x="74"  y="83"    width="52" height="127"   rx="3" fill="var(--warn)"/>
-          <text class="vl" x="76" y="76" fill="var(--warn)">79.4</text>
+          <rect x="74"  y="121.8" width="52" height="88.2"  rx="3" fill="var(--warn)"/>
+          <text class="vl" x="76" y="115" fill="var(--warn)">55.1</text>
           <text class="tk" x="94" y="226">1</text>
 
-          <rect x="150" y="126.5" width="52" height="83.5"  rx="3" fill="var(--online)"/>
-          <text class="vl" x="152" y="120">52.2</text>
+          <rect x="150" y="127.8" width="52" height="82.2"  rx="3" fill="var(--online)"/>
+          <text class="vl" x="152" y="121">51.4</text>
           <text class="tk" x="170" y="226">4</text>
 
-          <rect x="226" y="122.3" width="52" height="87.7"  rx="3" fill="var(--online)"/>
-          <text class="vl" x="228" y="116">54.8</text>
+          <rect x="226" y="129.0" width="52" height="81.0"  rx="3" fill="var(--online)"/>
+          <text class="vl" x="228" y="122">50.6</text>
           <text class="tk" x="246" y="226">8</text>
 
-          <rect x="302" y="125.7" width="52" height="84.3"  rx="3" fill="var(--online)"/>
-          <text class="vl" x="304" y="119">52.7</text>
+          <rect x="302" y="129.2" width="52" height="80.8"  rx="3" fill="var(--online)"/>
+          <text class="vl" x="304" y="122">50.5</text>
           <text class="tk" x="318" y="226">16</text>
 
-          <rect x="378" y="120.7" width="52" height="89.3"  rx="3" fill="var(--online)"/>
-          <text class="vl" x="380" y="114">55.8</text>
+          <rect x="378" y="130" width="52" height="80"  rx="3" fill="var(--online)"/>
+          <text class="vl" x="380" y="123">50.0</text>
           <text class="tk" x="394" y="226">32</text>
         </g>
         <text class="tk" x="52" y="246">collections per request — flat from 4 to 32</text>
@@ -744,26 +744,27 @@ html{scroll-behavior:smooth}
       </svg>
       <p class="chart-note">32 collections cost the same as 4, so the automatic feature lookup
       <strong>batches</strong> the per-collection reads rather than issuing them serially. Three
-      independent runs agree, including one from a different network position.</p>
+      independent runs agree, including one from a different network position. Bars: v12, 24 Sep 2026.</p>
     </div>
     <div>
       <div class="stats" style="grid-template-columns:1fr 1fr">
-        <div class="stat o"><b>52 / 67</b><span>p50 / p95 ms, low concurrency, 12 collections</span></div>
-        <div class="stat o"><b>~35 ms</b><span>the feature-lookup share, measured directly</span></div>
+        <div class="stat o"><b>51 / 66</b><span>p50 / p95 ms, low concurrency, 12 collections</span></div>
+        <div class="stat o"><b>~34 ms</b><span>the feature-lookup share, measured directly</span></div>
         <div class="stat w"><b>429</b><span>what you get past capacity — not unbounded queueing</span></div>
-        <div class="stat g"><b>8,770</b><span>of 13,988 rejected in a 2→48 concurrency spike</span></div>
+        <div class="stat g"><b>10,157</b><span>of 15,395 rejected in a 2→48 concurrency spike</span></div>
       </div>
       <h3 style="margin-top:16px">Throughput, stated honestly</h3>
-      <p class="small">At concurrency 32 we measured <strong>~80 req/s</strong> in a closed-loop ramp
-      (p50 369 ms, no rejections) and <strong>~206 req/s</strong> under open-loop overload (p50 71 ms,
-      excess shed as 429). Same endpoint, same config, 2.6× apart. A 10-minute sustained hold showed
-      <strong>no scale-up at all</strong> (factor 1.0), so "capacity arriving over minutes" is
-      <em>not</em> supported by the current run and we are not claiming it.</p>
+      <p class="small">At concurrency 32 the latest 10-minute sustained hold started at
+      <strong>83.9 req/s</strong> (p50 315 ms, no rejections, queueing) and reached
+      <strong>~200 req/s</strong> (p50 ~68 ms, excess shed as 429) — 2.4×, 90% of best after
+      <strong>~60 s</strong>. The run before served ~206 req/s from the first 30 s; an earlier pair
+      of sweeps needed ten minutes. How long scale-up takes is <em>not</em> predictable, and we are
+      not claiming a number for it.</p>
       <p class="small" style="margin-top:10px"><strong>What survives regardless: provision the floor
       for peak. Do not size against autoscaling.</strong>
       <span class="mono">min_provisioned_concurrency</span> is what you actually get.</p>
-      <p class="small" style="margin-top:10px">Recovery after the spike is immediate — p50 54 ms,
-      p95 69 ms, 4 residual 429s. No queue to drain, no lasting damage.</p>
+      <p class="small" style="margin-top:10px">Recovery after the spike is immediate — p50 49.5 ms,
+      p95 61 ms, 15 residual 429s. No queue to drain, no lasting damage.</p>
     </div>
   </div>
   <p class="small">Measured from two vantage points on purpose: a laptop saturates at 53.8 req/s and

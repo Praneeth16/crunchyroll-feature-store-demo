@@ -19,8 +19,8 @@ Status vocabulary is deliberately narrow: **met** = built and verified in a live
 | Feature Engineering | met | `notebooks/20_vertical/21_rail_features.py`, `src/crfs/rails.py` |
 | Feature Store | met | 7 UC feature tables, all published to Lakebase; `verify.sh` asserts row counts and dedup |
 | Model Training | met | `notebooks/20_vertical/22_train_rail_ranker.py`, trained from `fe.create_training_set` |
-| Model Registration | met | UC model `crunchyroll_rail_ranker` v11, `@champion`, tagged and described |
-| Model Serving | met | `crunchyroll-rail-ranker`, READY, serving v11, `scale_to_zero=false`, concurrency 4–32 |
+| Model Registration | met | UC model `crunchyroll_rail_ranker` v12, `@champion`, tagged and described (2026-09-24 run) |
+| Model Serving | met | `crunchyroll-rail-ranker`, READY, serving v12 (`rail_ranker-12`), `scale_to_zero=false`, concurrency 4–32 |
 | Ranked Rails | met | `notebooks/20_vertical/24_homepage_assembly.py` — 14–16 eligible rails per viewer (mean 15.4), ranked in one call |
 
 All five stages run from one command (`make up`), on a workspace whose ids are
@@ -57,7 +57,7 @@ UDFs.** Nothing forked, nothing copied, no private per-model copy of a viewer fe
 | Training dataset from stored features | met | `fe.create_training_set` with 4 `FeatureLookup`s and 5 `FeatureFunction`s; **no hand-written join** |
 | Point-in-time correctness | met | `timestamp_lookup_key` against `viewer_rail_features_ts`; verified with an isolated probe job before the architecture was chosen |
 | Model management | met | registered in **Unity Catalog** (not the workspace registry), so it is a securable with grants and lineage |
-| Version management | met | integer versions, `@champion` alias, three tags incl. `ndcg5_lift_vs_editorial=+0.0429`, full description, lineage to `run_id` |
+| Version management | met | integer versions, `@champion` alias, three tags incl. `ndcg5_lift_vs_editorial=+0.0570`, full description, lineage to `run_id` |
 | Deployment | met | notebook 23 resolves `@champion` → version 11 and pins the **immutable version**; promotion and deployment stay two separate steps |
 | Rollback | met | set the `model_version` widget to a previous version and rerun; in-place update, no rebuild |
 | Training at production volume | **partial** | the PIT join is Spark and scales; the **estimator does not** — `toPandas()` + scikit-learn is single-driver. Documented, with the substitution named (Spark ML / XGBoost on Spark from `load_df()`), and it does not touch the feature layer or serving path |
@@ -77,7 +77,7 @@ UDFs.** Nothing forked, nothing copied, no private per-model copy of a viewer fe
 | Returns personalized rankings | met | `rail_id` / `engagement_probability` / `rail_rank`, ranked within `viewer_id` |
 | **How online features are retrieved** | met | the endpoint does it, not the caller: **7 request fields in, 45 feature values resolved server-side** across 4 tables and 5 UDFs (the model scores on 47 features: 43 of those retrieved values plus the 4 context fields the caller sends) |
 | Context actually changes the answer | met | notebook 24 and the app score the same viewer at 09:00/21:00 × TV/mobile; **5 to 12 of 16 rails move** between contexts (live, 2026-09-18, two runs against the 21:00 TV order: 09:00 TV 6 then 5, 21:00 mobile 12 then 7, 09:00 mobile 9 both times) with nothing in the feature store changing. A zero would fail the run loudly |
-| Personalization is the source of the lift | met | ablation removing all 13 rail-identity features loses nothing (NDCG@5 0.6984 → 0.7026), across two independent runs |
+| Personalization is the source of the lift | met | ablation removing all 13 rail-identity features loses nothing (v12: NDCG@5 0.6978 → 0.7067; v11: 0.6984 → 0.7026), across three independent runs |
 
 ---
 
@@ -87,20 +87,20 @@ UDFs.** Nothing forked, nothing copied, no private per-model copy of a viewer fe
 
 | Element of the ask | Status | Measured |
 |---|---|---|
-| End-to-end latency | met | **p50 52 ms / p95 67 ms** in region, 12 rails; decomposed into ~35 ms feature layer + ~17 ms model |
+| End-to-end latency | met | **p50 51 ms / p95 66 ms** in region, 12 rails (v12, 2026-09-24); decomposed into ~34 ms feature layer + ~17 ms model |
 | Latency vs request size | met | **flat 4 → 32 rails** — lookups are batched, not serial |
-| Concurrency / throughput | met | **not a single number**: ~80 req/s at concurrency 32 in a closed-loop ramp, ~206 req/s admitted under open-loop overload with the excess shed as 429. A 2.6x spread on identical config; the mechanism is not cleanly established — see `vertical_ranking.md` §4 |
+| Concurrency / throughput | met | **not a single number**: at concurrency 32, ~80 req/s while the endpoint queues, ~200–218 req/s admitted once it sheds the excess as 429. A 2.4–2.6x spread on identical config; the mechanism is not cleanly established — see `vertical_ranking.md` §4 |
 | Behaviour past the ceiling | met | **HTTP 429**, not unbounded queueing — undocumented publicly, so worth having measured |
-| Autoscaling behaviour | met, and the finding is negative | scale-up takes **minutes, not seconds** — a 12-second burst gets no new capacity, while ten minutes of load bought 2.6x throughput. **Provision the floor for peak; do not rely on scale-up** |
-| Traffic spikes | met | 2 → 48 concurrent: p50 153 ms, p95 294 ms, **8,770 of 13,988 rejected**, 207 req/s served; recovery to baseline **immediate** (p50 54 ms, p95 69 ms) with 4 residual 429s |
+| Autoscaling behaviour | met, and the finding is negative | scale-up is **neither instant nor predictable** — the latest run reached 90% of best throughput after **~60 s** of sustained load (2.4x), the run before saw no scale-up at all, an earlier pair of sweeps needed ten minutes, and a 12-second burst never gets new capacity. **Provision the floor for peak; do not rely on scale-up** |
+| Traffic spikes | met | 2 → 48 concurrent: p50 103 ms, p95 255 ms, **10,157 of 15,395 rejected**, 208 req/s served; recovery to baseline **immediate** (p50 49.5 ms, p95 61 ms) with 15 residual 429s (v12, 2026-09-24) |
 | Cold start | n/a by design | `scale_to_zero=false`, so there is none. The 1,454 ms first request from a laptop is TLS + first OAuth token fetch, client-side |
 | Scalability at real cardinality | **not met** | 4,681 online keys is not 50 million. Named as the top follow-up |
 | Fallback path | met, in the reference homepage service | timeout budget (300 ms) + circuit breaker per endpoint; rails fall back to the viewer's last good order (filtered to the current eligible set), then editorial; every response names its tier. Demonstrable from the app. `docs/homepage_service.md` |
-| End-to-end homepage latency (both rankers + online rows) | met | **94–109 ms p50 / 142–176 ms p95** server-side in region over two runs, 80/80 served by both models each time — `scripts/bench_app.py`. The previous app spent ~2.4 s per view in two SQL-warehouse statements before calling either model |
+| End-to-end homepage latency (both rankers + online rows) | met | **94–119 ms p50 / 142–216 ms p95** server-side in region over three runs, every request served by both models each time — `scripts/bench_app.py`. The slowest run was the one straight after the 2026-09-24 fresh deploy. The previous app spent ~2.4 s per view in two SQL-warehouse statements before calling either model |
 
 Two vantage points are reported (`make bench` in region, `make bench-local` from a
 laptop) because a laptop saturates at 53.8 req/s and therefore sees **zero** 429s in
-the same spike that rejects 10,097 in region — i.e. benchmarking from outside the
+the same spike that rejects 10,097 in region (10,157 on 2026-09-24) — i.e. benchmarking from outside the
 region overstates headroom by roughly 4×.
 
 ---
@@ -140,7 +140,7 @@ the original document, so it is recorded here as an addition rather than an ask 
 | Element | Status | Evidence |
 |---|---|---|
 | Batch scoring from the same feature store | met | `notebooks/20_vertical/26_batch_scoring.py`, `fe.score_batch` against the **offline** store — no online store involved |
-| Same model serves both paths | met | v11 `@champion` scored both ways; **16 of 16 collections at identical rank**, Spearman 1.0 |
+| Same model serves both paths | met | v11 `@champion` scored both ways (measured 2026-09-18; not rerun against v12); **16 of 16 collections at identical rank**, Spearman 1.0 |
 | Minutes-level refresh cadence | met, at demo scale | CDF-driven incremental mode; `make batch-incremental`. Unsized at their MAU |
 | What batch gives up | measured | **up to 12 of 16 collections** move across four contexts (5-12 across runs) — personalization a precomputed table cannot deliver |
 | Migration path documented | met | `docs/batch_and_online.md` — what changes is one API call and where features are read from |

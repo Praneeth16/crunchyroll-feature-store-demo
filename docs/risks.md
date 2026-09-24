@@ -255,18 +255,21 @@ Consequences to state out loud rather than discover in a review:
   is possible. That is the single highest-value logging change to make before a real
   build.
 
-## 16 · No fallback path
+## 16 · No fallback path — now built in the reference homepage service
 
-**Likelihood: certain, and it is a real gap.**
+**Status: built for the demo app; production design still Crunchyroll's.**
 
-This POC has no cached previous ranking, no editorial default on timeout, and no
-circuit breaker. If the rail endpoint is slow or unavailable, the demo app surfaces
-the error and the notebook raises.
+The first draft of this POC had no cached previous ranking, no editorial default on
+timeout and no circuit breaker; a slow rail endpoint surfaced as an error. The homepage
+service ([homepage_service.md](homepage_service.md)) now has all three: a per-call
+timeout budget, a circuit breaker per endpoint, and model → last-good → editorial tiers,
+with every response naming the tier that served it.
 
-A production homepage needs all three, and their design affects the latency budget
-more than the model does — a 40 ms p95 with a 150 ms timeout and a cached fallback is
-a different system from a 40 ms p95 with no fallback at all. Named here rather than
-quietly omitted.
+What remains open is the production shape: the last-good ranking is cached in process
+(one app instance), not in a store shared by a fleet, and the budget should come from
+the homepage's latency SLO. Their design still affects the latency budget more than the
+model does — a 40 ms p95 with a 150 ms timeout and a cached fallback is a different
+system from a 40 ms p95 with no fallback at all.
 
 ## 17 · The same encoder bug was latent in the watch-next ranker — now fixed
 

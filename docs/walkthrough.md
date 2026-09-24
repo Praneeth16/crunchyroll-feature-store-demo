@@ -13,7 +13,7 @@ truth for a model's own metrics -- the registry is.
 ## Step 0 · Raw signals
 
 `notebooks/00_shared/00_data_generation.py` writes five tables into
-`serverless_lakebase_praneeth_catalog.crunchyroll_demo`, every one with Change Data Feed
+`<catalog>.crunchyroll_demo`, every one with Change Data Feed
 enabled:
 
 | Table | Rows | What it is |

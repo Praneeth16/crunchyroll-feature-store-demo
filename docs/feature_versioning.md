@@ -110,7 +110,7 @@ also the thing serving pins, so it is the right place for the guarantee to live.
 ## What this buys, concretely
 
 * A feature engineer can rebuild `viewer_features_current` with different maths at 2pm
-  and the endpoint serving `crunchyroll_rail_ranker` v10 returns exactly what it
+  and the endpoint serving a pinned `crunchyroll_rail_ranker` version returns exactly what it
   returned at 1pm. That is not a convention being followed carefully; there is no code
   path by which the endpoint could read the new definition.
 * A retrain at 3pm picks up the new maths, gets a new version, a new fingerprint tag,

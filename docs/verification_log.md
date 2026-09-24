@@ -2,11 +2,11 @@
 
 The rule for this repo: **nothing enters the README without a dated entry here.**
 Every row is something that was actually run against
-`fevm-serverless-lakebase-praneeth`, with the command and the real output.
+the reference workspace (AWS us-east-1), with the command and the real output.
 
 ## 2026-09-16 — vertical (rail) ranking
 
-Every row below was run against `fevm-serverless-lakebase-praneeth`. The first four
+Every row below was run against the reference workspace (AWS us-east-1). The first four
 are what the whole vertical architecture rests on; the rest are defects that only a
 live run surfaced.
 
@@ -19,7 +19,7 @@ live run surfaced.
 | V5 | The homepage log has the position bias it is supposed to have | notebook 20 exit payload | 363,351 rail impressions over 23,511 sessions, 16 rails. Viewport rate 0.3876, CTR 0.1216. `P(viewport given position)` falls **0.9712 at position 1 to 0.09 at position 16**; max clipped IPS weight 10.0. |
 | V6 | Rail eligibility genuinely varies per viewer | notebook 20 / 21 | State-gated rails carry fewer impressions than always-eligible ones in the 30-day window: `r_watchlist` 4,811 and `r_continue` 7,303 against `r_action` 7,971. The eligible set is not constant, which is what the serving contract has to handle. |
 | V7 | Both online tables re-publish idempotently | notebook 21 exit payload | `online_rail_features` and `online_viewer_rail` both reported `"action": "refreshed"`, each `SYNCED_TABLE_ONLINE_NO_PENDING_UPDATE` at the source commit version. No `AlreadyExists`. |
-| V8 | The one-command setup discovers a workspace it was not written against | `./scripts/bootstrap.sh --profile fe-vm-lakebase-praneeth` | Resolved CLI 1.14.1, auth, schema, serverless warehouse `4d39ac2e32b72a3a`, store `AVAILABLE CU_1`, Lakebase endpoint `ACTIVE 4-8 CU`, db resource `...databases/db-p78x-mcrka97vph`, chat model. Wrote 12 `--var` values to `.crfs.vars`; `bundle validate --strict` passed with them applied. |
+| V8 | The one-command setup discovers a workspace it was not written against | `./scripts/bootstrap.sh --profile <PROFILE>` | Resolved CLI 1.14.1, auth, schema, serverless warehouse `<warehouse-id>`, store `AVAILABLE CU_1`, Lakebase endpoint `ACTIVE 4-8 CU`, db resource `...databases/<db-id>`, chat model. Wrote 12 `--var` values to `.crfs.vars`; `bundle validate --strict` passed with them applied. |
 | V15 | **Cold start on a scale-to-zero endpoint, measured** | `src/crfs/loadtest.EndpointClient` from a laptop against `crunchyroll-watch-next-ranker`, which had been idle and reported `deployment_state_message: "Scaled to zero"` | First request **timed out at 30 s**. Immediately after, the same call took **9,847.9 ms**, then settled at **383, 354, 394, 382 ms** warm. So the cold start cost between 10 s and >30 s, against a warm laptop-observed p50 of ~380 ms — a factor of 26 or worse, with no upper bound observed. This is the entire argument for `scale_to_zero_enabled: false` on `crunchyroll-rail-ranker`, and it is why `scripts/verify.sh` fails if that setting is not disabled. The ~380 ms warm figure is laptop-to-region and is **not** the platform's latency; `make bench` measures that from inside the region. |
 | V16 | **Request-time rail eligibility was measured from the wrong clock and the wrong window** | Rendered `rails.ELIGIBLE_RAILS_SQL` for 5 viewers and counted the rows | All 5 returned **16 of 16 rails eligible**, against a homepage log in which `r_continue` (7,303 impressions) and `r_watchlist` (4,811) genuinely carried fewer than the always-eligible rails (7,971). Cause: the serving SQL used a 30-day window measured from `current_timestamp()`, while `generate_rail_impressions` used 7 days measured from the data. With generated history ending 9 days before wall clock, every viewer looked active. Fixed to anchor on `MAX(event_ts)` with `INPROGRESS_DAYS = 7`, matching the generator, and the app's copy of the logic was corrected the same way. After the fix, eligible sets run **14–16 of 16**: 247 of 300 viewers are offered Continue Watching, 53 are not. Worth recording because the demo would have looked entirely correct with this bug in place — the eligible set was simply always full. |
 | V17 | **The point-in-time join is the scaling limit of this training notebook, not the model fit** | `fe.create_training_set(..., timestamp_lookup_key="ts")` over 363,351 labels against the 421,290-row `viewer_rail_features_ts`, then `.load_df().toPandas()` for train and holdout | **Did not finish inside a 60-minute task timeout, on two separate runs** (~57 min elapsed when cancelled the second time, with no error). An as-of join is a range join, and range joins degrade with the product of the two sides. Ruled out first: `permutation_importance(n_jobs=-1)` was suspected and fixed (n_jobs=1, 2 repeats, 8k rows) and the hang persisted, so the importance step was not the cause. Two changes came out of it: a `label_sample_frac` widget defaulting to **0.25** (~91k labels, ~6k holdout sessions — enough for the per-session ranking metrics), sampled by whole homepage session so a session is never split across the boundary; and the point-in-time proof narrowed to 3 viewers **before** the join instead of `orderBy(...).limit(400)` after it, which had made a six-row diagnostic as expensive as the training set. The feature tables and `rail_position_propensity` are still built from the **full** 363k log — the sample only affects what the model is fit on, and the notebook prints both counts so the metrics are never read without that context. The honest production answer, written up in `docs/vertical_ranking.md` § 2, is that `toPandas()` + scikit-learn is the wrong estimator at Crunchyroll's volumes; the join is Spark and scales, so the substitution is Spark ML fed from `load_df()` without the collect, and it touches neither the feature layer nor the serving path. |
@@ -82,15 +82,15 @@ live run surfaced.
 
 | # | What | How | Result |
 |---|---|---|---|
-| 1 | Online store cost | `system.billing.usage ⨝ list_prices` on `usage_metadata.endpoint_id = ep-wild-dawn-d2ao0nf7` | 30.67 DBU/day at $0.52/DBU = **$15.95/day**, flat Sep 2–6. 221.4 DBU ≈ $115 since Aug 31. |
+| 1 | Online store cost | `system.billing.usage ⨝ list_prices` on `usage_metadata.endpoint_id = <endpoint-uid>` | 30.67 DBU/day at $0.52/DBU = **$15.95/day**, flat Sep 2–6. 221.4 DBU ≈ $115 since Aug 31. |
 | 2 | Capacity class drives the endpoint floor | `PATCH /api/2.0/feature-store/online-stores/...?update_mask=capacity` `{"capacity":"CU_1"}` then `postgres get-endpoint` | `CU_2 → CU_1` moved the endpoint from **min 8 / max 16 CU → min 4 / max 8 CU**. Store stayed `AVAILABLE`; all 3 synced tables stayed `SYNCED_TABLE_ONLINE_NO_PENDING_UPDATE`. |
-| 3 | Lakebase reachable over Postgres | `src/crfs/online.py` + psycopg 3.2.13 from a laptop | Connected as `praneeth.paikray@databricks.com` to db `serverless_lakebase_praneeth_catalog`, schema `crunchyroll_demo`. |
+| 3 | Lakebase reachable over Postgres | `src/crfs/online.py` + psycopg 3.2.13 from a laptop | Connected as the deploying user to db `<catalog>`, schema `crunchyroll_demo`. |
 | 4 | The pooled host rejects OAuth | psycopg against `...-pooler.database.us-east-1...` | `SASL authentication failed` on all three pooler IPs; the direct `status.hosts.host` authenticates with the same token. `online.py` now defaults `pooled=False`. |
 | 5 | Keyed-read latency, laptop | `store.keyed_read_latency("online_viewer_features", "viewer_id", 30 viewers)` | n=30, **p50 240.9 ms, p95 245.5 ms**, min 239.3. Network-dominated — label it as such. |
 | 6 | Example keyed read | `store.keyed_read("online_recent_behavior","viewer_id","v0001")` | `minutes_watched_24h=288.83, skips_24h=1, active_titles_24h=7, last_primary_genre='sci_fi'` in 250 ms. |
 | 7 | The 4 on-demand UDFs exist and behave | `DESCRIBE FUNCTION` + a SELECT exercising every branch | `match_scifi=0.3`, `match_action=0.4`, `cross_pop=0.42` (=0.3×(0.5+0.9)); `hour_near=0.8625`, `hour_far=0.0375`, **`hour_wrap_2h=0.75`** (23:00 vs 01:00 read as 2 hours apart, so the circular distance is right); `decay_10min=0.7165`, `decay_16min=0.5738`, `decay_clamped=0.0`, `decay_null=0.0`, `match_all_null=0.0`. |
 | 8 | UDF bodies must be block-free | `DESCRIBE FUNCTION EXTENDED cr_hour_affinity_delta` | Stored body showed an indented `return` at column 0 → `IndentationError` inside the executor as `UDF_USER_CODE_ERROR`. Rewritten with conditional expressions only. |
-| 9 | Preflight | `./scripts/preflight.sh fe-vm-lakebase-praneeth` | Passed: CLI 1.14.1, auth, schema, warehouse `4d39ac2e32b72a3a`, store `AVAILABLE CU_1`, endpoint `ACTIVE 4-8 CU`, db resource `...databases/db-p78x-mcrka97vph`, LLM `databricks-claude-sonnet-4-5` reachable. |
+| 9 | Preflight | `./scripts/preflight.sh <PROFILE>` | Passed: CLI 1.14.1, auth, schema, warehouse `<warehouse-id>`, store `AVAILABLE CU_1`, endpoint `ACTIVE 4-8 CU`, db resource `...databases/<db-id>`, LLM `databricks-claude-sonnet-4-5` reachable. |
 | 10 | Bundle | `databricks bundle validate --strict -t dev` then `deploy` | Validation OK; deploy created the app and 8 resources. |
 | 11 | Notebook 00 | serverless job run | SUCCESS. `titles=132, viewers=300, entitlements=39600, engagement_events≈107k`, plus an empty `engagement_events_stream` with CDF on. `verify.sh` reports history ending 0 days ago. |
 | 12 | `verify.sh` catches real drift | `./scripts/verify.sh` | Correctly failed on the two things that were genuinely missing at the time (the new viewer columns, and the not-yet-created retriever / feature-serving endpoints). |
@@ -200,7 +200,7 @@ path only to clean up tables published before the fix.
 
 | Documented limitation | Why it matters here |
 |---|---|
-| *"An online table's catalog name must match its underlying database name... if they differ, the model serving endpoint fails to deploy."* | Ours match — PG `current_database()` is `serverless_lakebase_praneeth_catalog`, same as the UC catalog. Verified, not assumed. |
+| *"An online table's catalog name must match its underlying database name... if they differ, the model serving endpoint fails to deploy."* | Ours match — PG `current_database()` is `<catalog>`, same as the UC catalog. Verified, not assumed. |
 | *"When a feature table is published to multiple online tables, model serving and feature serving endpoints always resolve to the oldest online table based on the creation timestamp."* | Real risk in this repo, which republishes and recreates tables repeatedly. A stale online table left behind would silently keep serving. Teardown must remove old ones, not just add new. |
 | `filter_condition`, `checkpoint_location`, `mode`, `trigger`, `features` are **unsupported** on `publish_table` | They appear in the signature. We pass none of them. |
 | *"Skipping publishing to online table '...' because the feature sync pipeline is already running."* Only one sync per online table at a time. | Explains why parallel job submissions against the same table were fragile during this build. |
@@ -374,7 +374,7 @@ the command that produced it.
 
 ## 2026-09-21 — the advanced track and the repo restructure (V67-V74)
 
-Everything in this section was run on `fevm-serverless-lakebase-praneeth` (AWS us-east-1)
+Everything in this section was run on the reference workspace (AWS us-east-1)
 against CLI **v1.17.0**, upgraded from v1.14.1 as part of the work.
 
 ### V67 · The app can be a bundle resource again — CLI v1.17.0 fixes the update mask
@@ -407,7 +407,7 @@ app print its own env once at startup — every expected variable was present, i
 ### V68 · A hand-built `--var` list is a single argument under zsh
 
 While verifying the app's environment, `DATABRICKS_CATALOG` came back as
-`serverless_lakebase_praneeth_catalog --var=schema=crunchyroll_demo --var=…` — the entire
+`<catalog> --var=schema=crunchyroll_demo --var=…` — the entire
 rest of the command line swallowed into one value.
 
 Cause: zsh does not word-split unquoted parameter expansions, so
@@ -928,7 +928,7 @@ read; first token ~1.1 s, full answer ~2.5 s.
 
 First deploy of the React frontend: `npm warn tarball ... seems to be corrupted` for a dozen
 packages, then `E404 ... yallist-3.1.1.tgz is not in this registry` from
-`npm-proxy.cloud.databricks.com`, failing the deployment in 12.6 s. The build now happens on the
+the workspace npm proxy, failing the deployment in 12.6 s. The build now happens on the
 laptop (`make frontend`) and `app/frontend/dist` is shipped through `sync.include`; with no
 `package.json` at the app root, Apps runs pip only.
 
@@ -967,3 +967,59 @@ the quota check precedes the already-exists check. Notebook 32 now logs, then ad
 with `create_model_version` when the model exists. Rerun registered v6; `crfs_canary` then
 scored it **0/40 errors, p95 139 ms vs 150 ms limit, Spearman 0.61 → PROMOTE** (dry run).
 Four unused registered models of this user were deleted to take the metastore under quota.
+
+### V98 · 2026-09-24 · The whole thing again, from one command
+
+`./setup.sh --profile <PROFILE> --catalog <catalog> --target dev --yes` ran every stage to
+completion (bootstrap, deploy, horizontal, vertical, grants, app, bench, verify) and ended
+`verify passed`, with one warning: `route_optimized=False` on the rail endpoint, which
+cannot be enabled in place. A laptop network drop mid-run (the workspace IP access list
+rejected a new address) cut the CLI's polling at stage 4; the job kept running server-side
+and the remaining stages were resumed with `--stage`.
+
+It re-generated the synthetic data, so every model retrained and the numbers moved:
+
+| | before | after this run |
+|---|---|---|
+| rail ranker `@champion` | v11 | **v12** (`rail_ranker-12`, provisioned concurrency 4–32, `scale_to_zero=false`) |
+| watch-next ranker | v13 | **v15** |
+| candidate retriever | v7 | **v8** |
+| rail NDCG@5, ranker vs incumbent editorial | 0.6984 vs 0.6697 (+4.29%) | **0.6978 vs 0.6602 (+5.70%)**, 524 holdout sessions |
+| ablation (no rail-identity features) NDCG@5 | 0.7026 | **0.7067**, Spearman 0.931 vs full |
+| holdout AUC all / viewed | 0.7419 / 0.6331 | **0.7424 / 0.6319** |
+
+The ablation conclusion held for a third time: removing all 13 rail-identity features does
+not lose NDCG, so the lift is personalization.
+
+### V99 · 2026-09-24 · The benchmark after the rebuild, and the app against it
+
+`crfs_benchmark` (in region, v12; `docs/serving_benchmark.md`, regenerated by `make
+bench-pull`):
+
+* fan-out flat: p50 **50–55 ms** from 1 to 32 rails per request;
+* ramp: no errors through concurrency 8 (**147 req/s**, p95 72 ms); from 16 up the endpoint
+  answers ~**214–218 req/s** and sheds the rest with 429;
+* sustained concurrency 32 for 600 s: first 30 s window 83.9 req/s, best 201.2 req/s —
+  **2.4× scale-up, 90% of best in 60 s**. The previous run measured 1.0× (206 req/s from
+  its first window), so how much capacity is already there when load arrives varies run to run;
+* spike 2 → 48: 10,157 of 15,395 requests rejected, p50 103 / p95 255 ms; recovery at
+  p50 49.5 / p95 61 ms with 15 residual 429s;
+* server-side `execution_time_ms` p50 / p95 **64 / 688 ms** over 8,542 captured requests,
+  0 non-200.
+
+`scripts/bench_app.py` against the deployed app afterwards: homepage server-side total
+**p50 119 / p95 216 ms**, **40 of 40** served by both models.
+
+### V100 · 2026-09-24 · Nothing in the repo is pinned to the workspace it was built on
+
+The bundle targets carried a fixed `workspace.host`, and every script fell back to this
+workspace's profile and catalog when an argument was missing. Now the host comes from the
+CLI profile, the profile is remembered in `.crfs.vars` once passed, `warehouse_id` and
+`notification_email` have no default, and scripts refuse to guess. Verified:
+
+* `databricks bundle validate -t dev` and `-t prod` with the `.crfs.vars` vars: OK;
+* without them: `no value assigned to required variable warehouse_id`;
+* `make preflight` with no profile and no `.crfs.vars`: `No profile. Pass PROFILE=<name>`;
+* `scripts/verify.sh` / `teardown.sh` with neither: a usage line, exit 2 — nothing acts on a
+  workspace that was not named;
+* `scripts/preflight.sh` now checks CLI ≥ 1.17.0 and Node ≥ 18 + npm.

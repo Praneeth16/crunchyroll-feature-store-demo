@@ -56,22 +56,24 @@ The ask ends by asking whether this approach can meet the latency, concurrency a
 scalability requirements of homepage ranking. Taking those one at a time, against
 measurements rather than positioning:
 
-* **Latency — yes, with room.** p50 **52 ms** in region for a 12-rail request, p95
-  **67 ms**, and **flat from 4 to 32 rails**. About 35 ms of that is the feature layer
-  and 17 ms the model. A homepage budget in the low hundreds of milliseconds has room
+* **Latency — yes, with room.** p50 **51 ms** in region for a 12-rail request, p95
+  **66 ms** (v12, 2026-09-24), and **flat from 4 to 32 rails**. About 34 ms of that is
+  the feature layer and 17 ms the model. A homepage budget in the low hundreds of milliseconds has room
   for this plus the horizontal call plus Crunchyroll's own service hops.
 * **Concurrency — yes, but you provision for peak; you do not autoscale into it.**
-  Measured on one configuration (provisioned concurrency 4–32), the same endpoint
-  served **~80 req/s at concurrency 32 in a closed-loop ramp and ~206 req/s admitted
-  under open-loop overload with the excess shed as 429** — a 2.6× difference from two
-  different load regimes measured on identical config. Past available capacity it returns
-  **429** rather than queueing. So `min_provisioned_concurrency` must be sized for peak,
-  a retry/fallback path is mandatory rather than optional, and **no single throughput
-  number describes this endpoint** without stating how long it had been warm.
+  Measured on one configuration (provisioned concurrency 4–32), the same endpoint at
+  concurrency 32 has served anywhere from **~80 req/s** (queueing, no rejections) to
+  **~200–218 req/s** admitted with the excess shed as 429. The latest run moved from the
+  first to the second in **~60 s** of sustained load; the run before saw ~206 req/s from
+  the first 30-second window; an earlier pair of sweeps needed ten minutes. Past available
+  capacity it returns **429** rather than queueing. So `min_provisioned_concurrency` must
+  be sized for peak, a retry/fallback path is mandatory rather than optional, and **no
+  single throughput number describes this endpoint** without stating how long it had been
+  under load.
 * **Scalability — not demonstrated at Crunchyroll's scale, and two specific things
   would have to change.** The measured ceiling here is a *configuration* ceiling, not
   a platform one; the sizing rule is `concurrency ≈ QPS × execution_seconds`, so at
-  52 ms each unit buys roughly 19 req/s, and public documentation puts Model Serving
+  ~51 ms each unit buys roughly 19 req/s, and public documentation puts Model Serving
   over 25K QPS. What this POC has **not** shown is (a) online-store read latency at
   real cardinality — 4,681 keys is not 50 million — and (b) training at real volume,
   where `toPandas()` + scikit-learn must be replaced by a Spark estimator. Neither
@@ -284,22 +286,26 @@ NDCG@5 and MRR per homepage session against three baselines — the incumbent
 editorial order, global rail CTR, and random — restricted to sessions with at least
 one engagement and at least four viewed rails.
 
-Measured on **542 holdout homepage sessions** (81,416 training rows, 10,199 holdout rows),
-model version 11, with **every feature lookup point-in-time** — see the note below, because
-that qualifier is the difference between these numbers and the ones this document used to
-carry:
+Measured on **524 holdout homepage sessions** (80,494 training rows, 9,663 holdout rows),
+model **version 12** (the 2026-09-24 end-to-end run, which regenerated the synthetic data),
+with **every feature lookup point-in-time** — see the note below, because that qualifier is
+the difference between these numbers and the ones this document used to carry:
 
 | Scorer | NDCG@3 | NDCG@5 | MRR |
 |---|---|---|---|
-| **Vertical ranker** | **0.5885** | **0.6984** | **0.6866** |
-| Vertical ranker, no rail-identity features | 0.5935 | 0.7026 | 0.6942 |
-| Incumbent editorial order | 0.5509 | 0.6697 | 0.6629 |
-| Rail popularity (global CTR) | 0.5516 | 0.6689 | 0.6616 |
-| Random | 0.4687 | 0.6074 | 0.5826 |
+| **Vertical ranker** | **0.5961** | **0.6978** | **0.7016** |
+| Vertical ranker, no rail-identity features | 0.5977 | 0.7067 | 0.7081 |
+| Incumbent editorial order | 0.5304 | 0.6602 | 0.6590 |
+| Rail popularity (global CTR) | 0.5418 | 0.6617 | 0.6617 |
+| Random | 0.4793 | 0.6115 | 0.6056 |
 
-**+4.29% NDCG@5** against the order the homepage ships today. Holdout AUC is 0.7419 across
-all impressions and **0.6331 on viewed impressions only** — the second number is the one
+**+5.70% NDCG@5** against the order the homepage ships today. Holdout AUC is 0.7424 across
+all impressions and **0.6319 on viewed impressions only** — the second number is the one
 to quote, because engagement on a rail nobody scrolled to is not a preference.
+
+The previous point-in-time run (v11, 542 sessions) read +4.29% (0.6984 vs 0.6697). The
+data was regenerated between the two runs, so the level moves with it; what matters is
+that the ordering of scorers and the ablation result are the same in both.
 
 ### These replace numbers that were measured through a leak
 
@@ -311,18 +317,21 @@ holdout impression's own click was inside its own features, so those metrics wer
 rather than optimistic**. `verification_log.md` V76 has the full account;
 `src/crfs/rails.py::rail_lookups` is the fix.
 
-What changed, and what did not:
+What changed, and what did not. The first two columns are the same data, so they isolate
+the leak; the third is the current version on regenerated data:
 
-| | Through the leak | Point-in-time |
-|---|---|---|
-| NDCG@5, ranker | 0.7157 | **0.6984** |
-| NDCG@5, incumbent | 0.6791 | **0.6697** |
-| Lift | +5.39% | **+4.29%** |
-| MRR | 0.7147 | **0.6866** |
-| AUC, viewed | 0.6345 | **0.6331** |
-| Ablated NDCG@5 | 0.7161 | **0.7026** |
+| | Through the leak | Point-in-time (v11) | Point-in-time (v12, current) |
+|---|---|---|---|
+| NDCG@5, ranker | 0.7157 | **0.6984** | **0.6978** |
+| NDCG@5, incumbent | 0.6791 | **0.6697** | **0.6602** |
+| Lift | +5.39% | **+4.29%** | **+5.70%** |
+| MRR | 0.7147 | **0.6866** | **0.7016** |
+| AUC, viewed | 0.6345 | **0.6331** | **0.6319** |
+| Ablated NDCG@5 | 0.7161 | **0.7026** | **0.7067** |
 
-The leak was worth about **1.1 points of lift**. It did not manufacture the result: the
+On the same data the leak was worth about **1.1 points of lift**. v12's higher lift is
+not the leak returning — its lookups are point-in-time — but a different sample; do not
+read the v11 → v12 move as an improvement. The leak did not manufacture the result: the
 ranker still beats the incumbent order, the ablation conclusion below still holds, and the
 serving path never depended on the training join at all. What it did was make the headline
 number indefensible, which is why it was withdrawn rather than adjusted.
@@ -333,36 +342,38 @@ and the honest measurement is an interleaving or bucket test, which this POC doe
 
 **Where the lift comes from — and a result worth pausing on.** The ablation drops all 13
 rail-identity features (44 numeric features down to 31), leaving only viewer × rail
-history, request context and the on-demand crosses. It does not lose anything: NDCG@5 goes
-from 0.6984 to **0.7026**, very slightly *up*, with Spearman 0.947 between the two
-models' scores confirming they genuinely differ. The leaky run showed the same thing
-(0.7157 → 0.7161, Spearman 0.9735), so this conclusion survived the correction — which is
-the strongest evidence for it, because the leak and the fix disagree about the level and
-agree about the shape.
+history, request context and the on-demand crosses. It does not lose anything: on v12
+NDCG@5 goes from 0.6978 to **0.7067**, slightly *up* (+7.0% over the incumbent against the
+full model's +5.7%), with Spearman 0.9309 between the two models' scores confirming they
+genuinely differ. v11 showed the same (0.6984 → 0.7026, Spearman 0.947), and so did the
+leaky run (0.7157 → 0.7161, Spearman 0.9735), so this conclusion survived both the
+correction and a data regeneration — which is the strongest evidence for it, because the
+runs disagree about the level and agree about the shape.
 
 **So the entire lift is personalization** — not a better fixed order of rails. That
 conclusion rests on the ablation, which is a direct measurement of the thing in question,
-and it has now held across two independent runs.
+and it has now held across three independent runs.
 
 Permutation importance, grouped by source, is the weaker evidence and is reported here
 with its instability rather than without:
 
-| Source | run A | run B | run C (v9) |
-|---|---|---|---|
-| `viewer_rail_features_ts` (new) | 0.0514 | 0.0419 | **0.0821** |
-| `rail_features` (new) | 0.0488 | 0.0465 | 0.0218 |
-| request-time UDFs | 0.0257 | 0.0297 | 0.0134 |
-| shared viewer tables (reused) | −0.0024 | +0.0021 | 0.0004 |
-| request context | 0.0005 | 0.0006 | −0.0006 |
+| Source | run A | run B | run C (v9) | run D (v12) |
+|---|---|---|---|---|
+| `viewer_rail_features_ts` (new) | 0.0514 | 0.0419 | **0.0821** | 0.0452 |
+| `rail_features` (new) | 0.0488 | 0.0465 | 0.0218 | 0.0355 |
+| request-time UDFs | 0.0257 | 0.0297 | 0.0134 | 0.0126 |
+| shared viewer tables (reused) | −0.0024 | +0.0021 | 0.0004 | 0.0015 |
+| request context | 0.0005 | 0.0006 | −0.0006 | 0.0007 |
 
 Runs A and B were two runs of `permutation_importance` at `n_repeats=2` on 8,000 rows
 against identically-trained models, and **the ordering of the top two swaps between
 them.** Run C, on the rebuilt data, separates them cleanly by nearly 4×. So the honest
 statement is that the *ranking* of those two sources is not reliably measurable at this
 sample size — do not read "viewer × rail is 4× more important than rail features" from
-run C any more than you would read the reverse from run B.
+run C any more than you would read the reverse from run B. Run D (v12) lands between
+them, at about 1.3×.
 
-What **is** stable across all three runs, and consistent with the ablation:
+What **is** stable across all four runs, and consistent with the ablation:
 
 * the **two new tables dominate** the signal, together several times any other source;
 * the **shared viewer tables sit at approximately zero** for rail ranking, either sign;
@@ -382,7 +393,7 @@ interaction signal is what moves the homepage order.** Rail-level aggregates are
 having for calibration and cold start.
 
 **An honest note on the shared tables.** The shared viewer features contribute essentially
-nothing to *rail* ranking — −0.0024, +0.0021 and +0.0004 across three runs, i.e.
+nothing to *rail* ranking — −0.0024, +0.0021, +0.0004 and +0.0015 across four runs, i.e.
 indistinguishable from zero every time. Sharing paid off **operationally** here (one
 pipeline, one online store, one always-on capacity bill, no second copy to keep
 consistent), not predictively for this model. A viewer's genre affinity matters much more
@@ -404,7 +415,7 @@ registry exists.
 
 Notebook 22 logs with `fe.log_model(registered_model_name=...)`, which registers into
 **Unity Catalog** — not the workspace registry. The model is
-`serverless_lakebase_praneeth_catalog.crunchyroll_demo.crunchyroll_rail_ranker`, so it is
+`<catalog>.crunchyroll_demo.crunchyroll_rail_ranker`, so it is
 a UC securable: the same grants, lineage and cross-workspace visibility as a table. Each
 training run produces a new integer version; nothing is overwritten.
 
@@ -413,13 +424,13 @@ API rather than asserted here:
 
 | | value on the current version |
 |---|---|
-| version | **10** |
+| version | **12** |
 | alias | **`@champion`** |
 | `position_bias_correction` | `ips` |
-| `ndcg5_lift_vs_editorial` | `+0.0429` — relative, i.e. +4.29% over the incumbent order, not an absolute NDCG delta |
+| `ndcg5_lift_vs_editorial` | `+0.0570` — relative, i.e. +5.70% over the incumbent order, not an absolute NDCG delta |
 | `serves` | `vertical rail ranking, homepage request path` |
 | description | model purpose, the four feature tables it reads, the five UDFs, the IPS weighting, holdout AUC on viewed impressions, NDCG lift, and the ablation result |
-| lineage | `run_id db31fcb9f1114c20ad41bd058b6913d5`, with 14 metrics logged against it |
+| lineage | `run_id e9d4507df49144d2a5bf4e3b0ea543b5`, with 14 metrics logged against it |
 
 The tags matter more than they look. `ndcg5_lift_vs_editorial` on the version means the
 question "which model is in front of the homepage and what did it actually beat" is
@@ -438,8 +449,8 @@ a promotion silently failed when it did not.
 Notebook 23 resolves `@champion` to a concrete version and serves **that number**:
 
 ```
-model_version widget blank  →  get_model_version_by_alias(MODEL, "champion")  →  10
-served entity name          →  rail_ranker-10
+model_version widget blank  →  get_model_version_by_alias(MODEL, "champion")  →  12
+served entity name          →  rail_ranker-12
 ```
 
 This is deliberate and it is the part most worth copying. The endpoint is pinned to an
@@ -454,9 +465,10 @@ version and rerun. The endpoint updates in place, the served entity is renamed t
 and there is no rebuild.
 
 The endpoint keeps the old served entity serving while the new one builds, so a version
-change is not an outage. What it is *not* is a canary: this POC sends 100% of traffic to
-one version. Model Serving supports traffic splitting across served entities, and a real
-rollout of a ranking model should use it — see §6.
+change is not an outage. On its own it is not a canary: a deploy sends 100% of traffic to
+one version. The canary is a separate step — `make canary` splits the endpoint 90/10, scores
+the same requests on each served entity, gates on error rate, p95 and rank agreement, and
+restores the champion unless told to promote ([canary.md](canary.md)).
 
 ## 3 · Online inference
 
@@ -548,20 +560,20 @@ than assumed.
 behaviour, and behaviour under traffic spikes.
 
 **Full tables in [`serving_benchmark.md`](serving_benchmark.md).** All measurements from
-an in-region job against `crunchyroll-rail-ranker` serving **version 11**
+an in-region job on 2026-09-24 against `crunchyroll-rail-ranker` serving **version 12**
 (`scale_to_zero=false`, provisioned concurrency 4–32, route optimization **off** because
 the workspace rejected it), 12 candidate rails per request unless stated.
 
 | Question | Measured |
 |---|---|
-| Latency, low concurrency | **p50 52 ms, p95 67 ms** (concurrency 1–2) |
-| Latency vs candidates per request | **flat**: p50 54–58 ms from 4 to 32 rails |
-| Throughput | **not a single number**: ~80 req/s at concurrency 32 in a closed-loop ramp, ~206 req/s admitted under open-loop overload with the excess shed as 429. A 2.6x spread on identical config; the mechanism is not cleanly established — see §4 |
+| Latency, low concurrency | **p50 50–51 ms, p95 63–66 ms** (concurrency 1–2) |
+| Latency vs candidates per request | **flat**: p50 50.0–51.4 ms from 4 to 32 rails |
+| Throughput | **not a single number**: at concurrency 32, 83.9 req/s in the first 30 s of sustained load (queueing, no rejections), then ~200 req/s admitted with the excess shed as 429 — 2.4× in **~60 s**. The previous run saw ~206 req/s from the first window. See below |
 | Behaviour past capacity | **HTTP 429**, not unbounded queueing |
-| Spike 2 → 48 concurrent | p50 153 ms, p95 294 ms, **8,770 of 13,988 rejected**, 207 req/s served |
-| Recovery after the spike | **immediate** — p50 54 ms, p95 69 ms, 4 residual 429s |
+| Spike 2 → 48 concurrent | p50 103 ms, p95 255 ms, **10,157 of 15,395 rejected**, 208 req/s served |
+| Recovery after the spike | **immediate** — p50 49.5 ms, p95 61 ms, 15 residual 429s |
 | Feature lookups + UDFs alone | **p50 33–35 ms** (Feature Serving, also flat 4→32) |
-| Model + ranking share | **~17 ms** (52 − 35) |
+| Model + ranking share | **~17 ms** (50.5 − 33.6 at 16 rails) |
 
 ### The fanout result
 
@@ -570,7 +582,8 @@ endpoint's automatic feature lookup **batches** the per-rail reads rather than i
 them serially. Two independent runs agree, and so does the laptop run from a completely
 different network position, which is what makes this the most solid conclusion here.
 
-The 1-rail measurement (86.4 ms) is *higher* than the 4-rail one, in both runs. That is
+The 1-rail measurement is *higher* than the 4-rail one in every run (55.1 vs 51.4 ms on
+v12; 86.4 ms on v11). That is
 first-shape cost, not a fanout effect — it is the first request of a new payload shape,
 and the warm-up request the harness sends does not cover every shape.
 
@@ -583,26 +596,22 @@ happens. The test ran and the serial model was simply wrong: the slope is zero.
 
 ### Throughput is not a single number, and this is the most important finding here
 
-**Corrected after a deliberate measurement.** A ten-minute sustained-load phase was added
-specifically to measure how long capacity takes to arrive. In the current run it has been
-moved ahead of the ramp (Phase 1b, before the concurrency sweep, see `notebooks/90_ops/25_serving_benchmark.py`
-lines ~138–176), and it still reports flat ~200 req/s from its very first 30-second window with
-scale_up_factor **1.0** and seconds_to_90pct_of_best **0**. This means capacity arriving
-over minutes is **not** supported by the current run. The two regimes visible in the full run
-are both at the **same** concurrency 32:
+**Measured deliberately, and it varies between runs.** A ten-minute sustained-load phase at
+concurrency 32 exists specifically to measure how long capacity takes to arrive (Phase 1b,
+before the concurrency sweep, see `notebooks/90_ops/25_serving_benchmark.py` lines
+~138–176). Its three readings so far:
 
-| regime | throughput | p50 | 429s |
-|---|---|---|---|
-| sustained (before the ramp) | ~206 req/s | 71 ms | ~12,000 per 30 s |
-| ramp (early phase, warming up) | 77.5 req/s | 369 ms | none |
+| run | first 30 s | best window | factor | to 90% of best |
+|---|---|---|---|---|
+| **v12, 2026-09-24 (current)** | 83.9 req/s, p50 315 ms, no 429s | 201.2 req/s, p50 ~68 ms, 429s shed | **2.4×** | **60 s** |
+| v11 | ~206 req/s | ~206 req/s | 1.0× | 0 s |
+| sweeps A/B (earlier) | ~80 req/s | ~212 req/s | 2.6× | within ~10 min |
 
-Both are real and they are different *modes*, not different capacities: early on the
-endpoint queues excess load, and once pushed it sheds it with 429s instead. Shedding
-gives higher successful throughput **and** lower latency for the requests that get
-through. Since the sustained phase runs first and already serves ~206 req/s, the
-difference is one of load regime (queueing vs shedding), not of capacity arriving — the
-underlying cause of the 2.6x spread is still not cleanly established. See `verification_log.md`
-V50 and V59.
+The two regimes are the same in every run — early on the endpoint **queues** excess load
+(low throughput, high latency, no rejections), and once pushed it **sheds** it with 429s
+(~200 req/s admitted, lower latency for the requests that get through). What varies is
+how long the switch takes: zero, one minute, or up to ten. The underlying cause is still
+not cleanly established. See `verification_log.md` V50 and V59.
 
 An earlier version of this document reported a **"~212 req/s ceiling, reached at
 concurrency 16"**. That number is real but it was **half of the evidence**, and reporting
@@ -619,17 +628,19 @@ the throughput.** The difference is that B ran after the endpoint had spent ten 
 under sustained load and had scaled toward its `max_provisioned_concurrency` of 32; A ran
 while it was still near the floor of 4.
 
-The current run shows the same effect: its sustained phase (run first, before any ramp)
-already serves **~206 req/s** at concurrency 32, and the ramp that follows plateaus at
-**77.5 req/s** — same 2.6x spread on identical concurrency in the same run.
+The v11 run showed the same spread inside one run (sustained ~206 req/s, then a ramp
+plateauing at 77.5 req/s). The v12 run shows it inside the sustained phase itself, and its
+ramp, run afterwards, admits 147 req/s at concurrency 8 with no rejections and 214–218
+req/s from concurrency 16 upward.
 
 Three consequences, and they matter more than any single latency number:
 
 * **Provision the floor for peak.** `min_provisioned_concurrency` is what you get
-  immediately; `max` is what you get several minutes later. For homepage traffic, size
-  the floor for peak rather than relying on scale-up.
-* **Autoscaling operates in minutes, not seconds.** A 12-second burst gets no new
-  capacity. A ten-minute load ramp gets 2.6×.
+  immediately; `max` is what you get after anywhere from zero seconds to several minutes.
+  For homepage traffic, size the floor for peak rather than relying on scale-up.
+* **Scale-up is not instant and not predictable.** The latest run needed ~60 s to reach
+  90% of its best throughput; an earlier pair of sweeps needed ten minutes; a 12-second
+  burst never gets new capacity.
 * **Never quote this endpoint's throughput without saying how long it had been under
   load.** Any benchmark short enough to be convenient measures the floor, not the ceiling.
 
@@ -639,30 +650,33 @@ Past available capacity the endpoint returns **HTTP 429** rather than queueing �
 stating plainly because current public documentation does not specify this behaviour. A
 caller needs retry-with-backoff and a fallback, not a longer timeout.
 
-In the newest run 429s appear only at concurrency **64** in the ramp (6,888 rejected while
-1,064 succeeded), and in the spike at 48. In the earlier, already-scaled run they began at
-concurrency 16. Which is to say: the concurrency at which rejection starts is a function
-of provisioned capacity at that moment, not a fixed property of the endpoint.
+In the v12 run 429s begin at concurrency **16** in the ramp (2,310 rejected while 2,595
+succeeded), after the sustained phase had already pushed the endpoint into shedding. In
+the v11 run they appeared only at concurrency 64. Which is to say: the concurrency at which
+rejection starts is a function of provisioned capacity and load mode at that moment, not a
+fixed property of the endpoint.
 
 For sizing, the documented rule is
-`provisioned_concurrency ≈ QPS × model_execution_seconds`. At ~52 ms per request that is
-roughly 19 req/s per unit of concurrency — and both measured regimes (80 req/s in a
-closed-loop ramp at concurrency 32, ~206 req/s admitted under open-loop overload) sit in
+`provisioned_concurrency ≈ QPS × model_execution_seconds`. At ~51 ms per request that is
+roughly 19 req/s per unit of concurrency — and both measured regimes (~80 req/s queueing,
+~200–218 req/s admitted while shedding) sit in
 the range that rule predicts for a floor of 4 and a ceiling of 32 respectively. Which
 regime you land in is the part that is not settled; see above.
 
 ### Spike behaviour
 
-Baseline at concurrency 2 is p50 55 ms / p95 76 ms. Stepping straight to 48 concurrent
-pushes p50 to 153 ms and p95 to 294 ms, serves 207 req/s, and **rejects 8,770 of 13,988
-offered requests with 429**. First second of the spike: p95 **316 ms**.
+Baseline at concurrency 2 is p50 50 ms / p95 66 ms. Stepping straight to 48 concurrent
+pushes p50 to 103 ms and p95 to 255 ms, serves 208 req/s, and **rejects 10,157 of 15,395
+offered requests with 429**. First second of the spike: p95 **202 ms**. (v11: p50 153 /
+p95 294 ms, 8,770 of 13,988 rejected.)
 
-When load drops the endpoint returns to baseline immediately — p50 **54 ms**, p95
-**69 ms**, with **4** residual 429s in the recovery phase.
+When load drops the endpoint returns to baseline immediately — p50 **49.5 ms**, p95
+**61 ms**, with **15** residual 429s in the recovery phase.
 
 The reassuring half is that there is no lasting damage and no queue to drain. The half to
 design around is that the excess is *rejected*, so the homepage needs a fallback order to
-render when that happens. This POC does not implement one.
+render when that happens — which the homepage service now has: a timeout budget, a circuit
+breaker and cached/editorial tiers ([homepage_service.md](homepage_service.md), "Fallback").
 
 One reporting detail, because it looks like a contradiction: the report's
 "seconds to return within 1.5× baseline p95" is **None**. That statistic is computed over
@@ -673,10 +687,10 @@ is the `spike_recovery` row, and it is immediate.
 ### Where the time goes
 
 The same fanout sweep against the Feature Serving endpoint — same governed features, no
-model — returns **p50 33–35 ms, also flat** across 4 to 32 rows. So of the ~52 ms at low
+model — returns **p50 33–35 ms, also flat** across 4 to 32 rows. So of the ~51 ms at low
 concurrency:
 
-* **~35 ms** is the online lookup and on-demand UDF layer,
+* **~34 ms** is the online lookup and on-demand UDF layer,
 * **~17 ms** is the model and the ranking,
 * and both are flat in the number of candidates.
 
@@ -686,12 +700,14 @@ would go: the feature layer, not the model.
 ### Server-side time, and what it can and cannot be compared with
 
 The endpoint's own `execution_duration_ms`, from the AI Gateway inference table, over the
-benchmark window: **11,911 requests, p50 98 ms, p95 403 ms, p99 570 ms, zero non-200**.
+benchmark window on v12: **8,542 requests, p50 64 ms, p95 688 ms, p99 937 ms, zero
+non-200** (v11: 11,911 requests, p50 98 / p95 403 / p99 570 ms).
 
 **This number must not be subtracted from the concurrency-1 client latency.** The window
 spans concurrency 1 through 64 *and* a 48-way spike, so it is dominated by requests made
-under heavy load — which is why the server-side p50 (98 ms) is *higher* than the
-client-observed p50 at concurrency 1 (52 ms). Those are different populations of requests,
+under heavy load — which is why the server-side p50 (64 ms) is *higher* than the
+client-observed p50 at concurrency 1 (51 ms), and why its p95 reflects the queueing
+phase of the sustained run. Those are different populations of requests,
 not a transport measurement.
 
 This is also a correction: earlier versions of this document said client wall time minus
@@ -709,8 +725,9 @@ The benchmark runs **twice**:
 * `make bench` — as a job inside the workspace region. This measures the platform.
 * `make bench-local` — the same code from a laptop.
 
-Both were run against the same endpoint and the same 12-rail payload. The in-region
-column is the current run (model version 11); the laptop column is the run made from here.
+Both were run against the same endpoint and the same 12-rail payload. This pair is from
+the model version 11 runs; the laptop run has not been repeated against v12, and the
+in-region v12 numbers above are within a few ms of the v11 ones at low concurrency.
 The latency gap between regions is two orders of magnitude larger than any difference
 between model versions.
 
@@ -824,8 +841,11 @@ The question the ask is really about.
   feature table.
 * **The homepage service.** Calling vertical once, then horizontal per rail in
   parallel, with timeouts and a fallback order.
-* **Fallbacks.** What the homepage renders when the endpoint is slow or down. This
-  POC does **not** implement one and that is a real gap — see below.
+* **Fallbacks.** What the homepage renders when the endpoint is slow or down. The
+  reference homepage service here has one — timeout budget, circuit breaker, cached
+  last-good and editorial tiers ([homepage_service.md](homepage_service.md)) — but where
+  the last-good ranking lives for a fleet, how long it stays usable, and the budget
+  itself are Crunchyroll's decisions.
 
 ### Crunchyroll operates
 
@@ -851,12 +871,14 @@ Stated plainly, because a POC that only lists strengths is not evidence.
 2. **Online store cardinality is small.** 4,681 online rows is not 50 million.
    Keyed reads on Postgres with an index degrade gently, but "gently" is not
    "measured". A scale test on representative cardinality is needed before sizing.
-3. **No fallback path.** No cached previous ranking, no editorial default on
-   timeout, no circuit breaker. A production homepage needs all three, and their
-   design affects the latency budget more than the model does.
+3. **The fallback path is a reference, not production.** The homepage service has a
+   per-call timeout budget, a circuit breaker and cached/editorial tiers
+   ([homepage_service.md](homepage_service.md)), but the last-good cache is in process
+   (one app instance) rather than shared across a fleet.
 4. **No A/B or online evaluation.** Offline NDCG against a logged policy is a
-   directional signal. Interleaving or a bucket test is the real measurement, and
-   this POC has neither.
+   directional signal. The canary gate ([canary.md](canary.md)) judges serving safety
+   (errors, latency, rank agreement), not engagement. Interleaving or a bucket test is
+   the real measurement, and this POC has neither.
 5. **Position bias is corrected, not solved.** IPS on observed engagements with a
    viewport signal is a reasonable estimator. It is not the same as an unbiased
    randomised-exposure dataset, and it assumes the propensity model is right.

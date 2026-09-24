@@ -20,3 +20,6 @@ docs/deck/*_standalone.html
 
 # The app frontend: dependencies and the build are produced where they run.
 node_modules/
+
+# Presenter notes that name people or carry live URLs stay local.
+docs/private/

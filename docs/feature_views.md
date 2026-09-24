@@ -23,7 +23,7 @@ API, and the existing pipeline, endpoints and app are what a customer readout re
 | package | `databricks-feature-engineering>=0.16.0` |
 | compute | serverless, or DBR 17.0 ML+ |
 | status | Public Preview — enabled per workspace on the Previews page |
-| verified here | `notebooks/30_advanced/29_preview_probe.py` (`make probe`) computed a real feature on `fevm-serverless-lakebase-praneeth`, us-east-1 |
+| verified here | `notebooks/30_advanced/29_preview_probe.py` (`make probe`) computed a real feature on the reference workspace (AWS us-east-1) |
 
 Run `make probe` on any new workspace before anything else in this track. It registers
 nothing and writes nothing.

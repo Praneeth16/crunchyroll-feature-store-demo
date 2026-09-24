@@ -23,6 +23,8 @@ The feature-serving endpoint scales to zero and the jobs are serverless and per-
 ranker never did (provisioned concurrency 4–32), and since 2026-09-23 the watch-next ranker
 and the retriever are `Small` with `scale_to_zero_enabled=false` too, because the homepage
 service calls them inside a 400 ms budget and the retriever's cold start measured **42 s**.
+Both came back with `scale_to_zero_enabled=false` after the 2026-09-24 end-to-end rebuild,
+so the setting survives a fresh deploy.
 That is two always-on Small CPU endpoints the demo did not previously pay for; flip the flag
 in notebooks 03 and 08 (or `serving-endpoints update-config`) for an idle workspace, and
 accept that the first homepage after idle will render its fallback tier.

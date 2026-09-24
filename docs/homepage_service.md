@@ -47,16 +47,19 @@ browser ── 1 POST /api/homepage ──► FastAPI
 `python3 scripts/bench_app.py --profile <PROFILE> --n 80` — `total_ms` is timed inside the
 app container, 80 requests, each viewer twice in different contexts (2026-09-23):
 
-| | run 1 p50 / p95 | run 2 p50 / p95 |
-|---|---|---|
-| **homepage, server-side total** | **94 / 142 ms** | **109 / 176 ms** |
-| rail ranker (vertical, 15 rails, 1 request) | 67 / 98 ms | 68 / 129 ms |
-| watch-next ranker (horizontal, ~47 titles) | 61 / 92 ms | 63 / 108 ms |
-| retriever (0 when cached) | 0 / 69 ms | 0 / 80 ms |
-| Lakebase keyed read (each of 3) | 3.7–3.9 / 5–6 ms | 3.9–4.2 / 6–8 ms |
+| | run 1 p50 / p95 | run 2 p50 / p95 | run 3 p50 / p95 |
+|---|---|---|---|
+| **homepage, server-side total** | **94 / 142 ms** | **109 / 176 ms** | **119 / 216 ms** |
+| rail ranker (vertical, 15 rails, 1 request) | 67 / 98 ms | 68 / 129 ms | not recorded |
+| watch-next ranker (horizontal, ~47 titles) | 61 / 92 ms | 63 / 108 ms | not recorded |
+| retriever (0 when cached) | 0 / 69 ms | 0 / 80 ms | not recorded |
+| Lakebase keyed read (each of 3) | 3.7–3.9 / 5–6 ms | 3.9–4.2 / 6–8 ms | not recorded |
 
-80 of 80 served by both models in both runs. Run 2 was minutes after a fresh deploy, so
-the spread between the two is the honest range: **~100 ms p50, 140–180 ms p95.** Before the retrieval cache: p50 152 / p95 288 ms, with
+80 of 80 served by both models in runs 1 and 2. Run 2 was minutes after a fresh deploy.
+Run 3 (40 requests, all 40 served by both models) followed the 2026-09-24 end-to-end
+rebuild, against rail ranker v12, watch-next ranker v15 and retriever v8; only its totals
+were kept. The spread across the three is the honest range: **~95–120 ms p50, 140–220 ms
+p95.** Before the retrieval cache: p50 152 / p95 288 ms, with
 3 of 60 title rankings falling back to retrieval order at the 400 ms budget.
 
 The laptop round trip (India → us-west-2, via the Apps proxy) is ~390 ms in a browser that
@@ -65,7 +68,8 @@ reuses its connection. That is geography and the proxy, not the service.
 ## Fallback — `docs/open_items.md` §5, now built
 
 Past its provisioned concurrency the rail endpoint returns **429** rather than queueing,
-and scale-up takes minutes (`serving_benchmark.md`). So the homepage has to render without
+and scale-up is not instant — ~60 s to 90% of best throughput in the 2026-09-24 run,
+up to ten minutes in earlier ones (`serving_benchmark.md`). So the homepage has to render without
 a fresh ranking. `app/backend/fallback.py`:
 
 * **Timeout budget per call** — rails 300 ms (≈4× the benchmark's 67 ms p95, but only 2–3× the 98–129 ms p95 the app itself

@@ -36,6 +36,9 @@ databricks bundle run crfs_canary ... --params apply=true   # let a PROMOTE take
 7. **Record** the decision, every check with its value, and the full report in
    `canary_decisions` (Delta, append-only).
 
+The champion has since moved to `rail_ranker-12` (the 2026-09-24 end-to-end run); both
+runs below were against v11 and are kept as dated records.
+
 Promotion stays two steps, as everywhere else here: routing is deployment; `@champion` is
 moved only if the challenger is a version of the same UC model. The GPU model is a
 different UC model, so promoting it is the route change plus the record, and notebook 23

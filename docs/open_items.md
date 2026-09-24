@@ -38,7 +38,7 @@ signal already exists, the propensity estimate becomes direct rather than modell
 
 **The largest untested assumption in the POC.**
 
-The 52 ms p50 rests on one precomputed row per `(viewer, rail)`. This POC has **4,681**
+The ~51 ms p50 rests on one precomputed row per `(viewer, rail)`. This POC has **4,681**
 such rows. Real scale is MAU × eligible rails — tens of millions to a billion.
 
 At tens of millions the design stands and the question is only Lakebase capacity class
@@ -160,5 +160,5 @@ obvious case; anything derived from engagement is the same case.
   observed `popularity_30d`). See `verification_log.md` V57.
 * **How long autoscaling takes.** Originally found by accident — two ramp sweeps ten
   minutes apart differing by 2.6× — and now measured deliberately by a sustained-load
-  phase that reports throughput per 30-second window. See V50 and
-  `serving_benchmark.md`.
+  phase that reports throughput per 30-second window. The readings vary: 2.4× in ~60 s on
+  v12 (2026-09-24), none at all on the v11 run. See V50 and `serving_benchmark.md`.
