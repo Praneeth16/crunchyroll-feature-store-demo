@@ -55,13 +55,16 @@ async def rank_rails(viewer: str, eligible: list[dict], ctx: dict, remember: boo
                 "day_of_week": ctx["day_of_week"], "request_epoch_s": ctx["request_epoch_s"]}
                for r in eligible]
     by_id = {r["rail_id"]: r for r in eligible}
-    resp, call = await guarded("rails", S.RAIL_TIMEOUT_MS, lambda: invoke(
-        S.RAIL_RANKER_ENDPOINT, {"dataframe_records": records}))
+    def parse(resp):
+        preds = sorted(resp["predictions"], key=lambda p: p["rail_rank"])
+        return ([p["rail_id"] for p in preds],
+                {p["rail_id"]: float(p["engagement_probability"]) for p in preds})
 
-    if resp is not None:
-        preds = sorted(resp.get("predictions") or [], key=lambda p: p["rail_rank"])
-        order = [p["rail_id"] for p in preds]
-        scores = {p["rail_id"]: float(p["engagement_probability"]) for p in preds}
+    ranked, call = await guarded("rails", S.RAIL_TIMEOUT_MS, lambda: invoke(
+        S.RAIL_RANKER_ENDPOINT, {"dataframe_records": records}), parse)
+
+    if ranked is not None:
+        order, scores = ranked
         source, age = "model", None
         if remember:
             last_good.put(viewer, order)
@@ -99,20 +102,25 @@ async def _retrieve(viewer: str):
     hit = _retrieval_cache.get(viewer)
     if hit and time.time() - hit[0] < RETRIEVAL_TTL_S:
         return hit[1], {"status": "ok", "ms": 0.0, "cached": True}
-    resp, call = await guarded("retriever", S.RETRIEVER_TIMEOUT_MS, lambda: invoke(
-        S.RETRIEVER_ENDPOINT, {"dataframe_records": [{"viewer_id": viewer, "top_k": RETRIEVE_K}]}))
-    if resp is not None:
-        _retrieval_cache[viewer] = (time.time(), resp)
+    def parse(resp):
+        cands = json.loads(resp["predictions"][0]["candidates"])
+        return {c["title_id"]: float(c["retrieval_score"]) for c in cands}
+
+    # Only a response that parsed is cached: a malformed one would otherwise be served
+    # back to this viewer for the whole TTL.
+    retrieval, call = await guarded("retriever", S.RETRIEVER_TIMEOUT_MS, lambda: invoke(
+        S.RETRIEVER_ENDPOINT, {"dataframe_records": [{"viewer_id": viewer, "top_k": RETRIEVE_K}]}),
+        parse)
+    if retrieval is not None:
+        _retrieval_cache[viewer] = (time.time(), retrieval)
         if len(_retrieval_cache) > 10_000:
             _retrieval_cache.pop(next(iter(_retrieval_cache)))
-    return resp, call
+    return retrieval, call
 
 
 async def rank_titles(viewer: str, surface: str, ctx: dict, clock: Clock):
-    retrieved, rcall = await clock.time("retriever", _retrieve(viewer))
-    if retrieved is not None:
-        cands = json.loads(retrieved["predictions"][0]["candidates"])
-        retrieval = {c["title_id"]: float(c["retrieval_score"]) for c in cands}
+    retrieval, rcall = await clock.time("retriever", _retrieve(viewer))
+    if retrieval is not None:
         rsource = "model"
     else:
         retrieval = {t: None for t in snapshot.popularity[:RETRIEVE_K]}
@@ -126,11 +134,16 @@ async def rank_titles(viewer: str, surface: str, ctx: dict, clock: Clock):
 
     scores, tcall = {}, {"status": "skipped", "ms": 0.0}
     if records:
-        resp, tcall = await clock.time("watch_next_ranker", guarded(
+        def parse(resp):
+            preds = resp["predictions"]
+            if len(preds) != len(eligible):
+                raise ValueError(f"{len(preds)} predictions for {len(eligible)} titles")
+            return dict(zip(eligible, (float(p) for p in preds)))
+
+        scored, tcall = await clock.time("watch_next_ranker", guarded(
             "titles", S.RANKER_TIMEOUT_MS,
-            lambda: invoke(S.RANKER_ENDPOINT, {"dataframe_records": records})))
-        if resp is not None:
-            scores = dict(zip(eligible, (float(p) for p in resp["predictions"])))
+            lambda: invoke(S.RANKER_ENDPOINT, {"dataframe_records": records}), parse))
+        scores = scored or {}
 
     order = sorted(eligible, key=lambda t: -scores[t]) if scores else eligible
     source = "model" if scores else ("retrieval" if rsource == "model" else "popularity")

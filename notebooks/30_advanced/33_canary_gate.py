@@ -120,12 +120,19 @@ requests = {
 print(f"{len(requests)} viewers, {sum(len(r) for r in requests.values())} rail rows")
 
 
-def ranks(preds):
-    """{rail_id: rank}. The champion returns rail_rank; rank by score if a challenger
-    returns only probabilities."""
+def ranks(preds, recs):
+    """{rail_id: rank}. The champion returns rail_rank; a challenger that returns only
+    probabilities -- as dicts with rail_id, or bare floats in request order -- is ranked
+    by score, so it is judged on its ordering rather than failed as a bad response."""
     if preds and isinstance(preds[0], dict) and "rail_rank" in preds[0]:
         return {p["rail_id"]: int(p["rail_rank"]) for p in preds}
-    return {}
+    if preds and isinstance(preds[0], dict) and "engagement_probability" in preds[0]:
+        scores = {p["rail_id"]: float(p["engagement_probability"]) for p in preds}
+    elif preds and not isinstance(preds[0], dict) and len(preds) == len(recs):
+        scores = {r["rail_id"]: float(p) for r, p in zip(recs, preds)}
+    else:
+        return {}
+    return {rid: i + 1 for i, rid in enumerate(sorted(scores, key=lambda r: -scores[r]))}
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## 3 · Split, measure, decide — restore in `finally`
@@ -153,7 +160,7 @@ try:
         got = {}
         for name in (base["name"], CAND_NAME):
             preds, ms, status = K.invoke_served(w, ENDPOINT, name, recs)
-            r = ranks(preds)
+            r = ranks(preds, recs)
             if status == "ok" and len(r) != len(recs):
                 status = f"bad_response: {len(r)} ranks for {len(recs)} rails"
             samples[name].append({"ms": ms, "status": status})
