@@ -19,18 +19,22 @@ import asyncio
 import time
 from collections import OrderedDict
 
+import httpx
+
 from . import settings as S
 
 
 class Breaker:
     """Closed -> open after N consecutive failures -> half-open after a cooldown,
-    where one trial call decides. Timeouts, 429s and 5xx all count."""
+    where one trial call decides. Timeouts, 429s, 5xx, dropped connections and
+    unparseable responses count; other 4xx are the request's fault, not the endpoint's."""
 
     def __init__(self, name: str):
         self.name = name
         self.failures = 0
         self.opened_at = None
         self.trips = 0
+        self.trial = False
 
     @property
     def state(self) -> str:
@@ -40,10 +44,23 @@ class Breaker:
             return "half_open"
         return "open"
 
+    def allow(self) -> bool:
+        """Closed: yes. Open: no. Half-open: only the first caller, until it resolves --
+        otherwise every request queued behind the cooldown hits a struggling endpoint at
+        once, which is the burst the breaker exists to stop."""
+        st = self.state
+        if st == "closed":
+            return True
+        if st == "half_open" and not self.trial:
+            self.trial = True
+            return True
+        return False
+
     def ok(self):
-        self.failures, self.opened_at = 0, None
+        self.failures, self.opened_at, self.trial = 0, None, False
 
     def fail(self):
+        self.trial = False
         self.failures += 1
         if self.state == "half_open" or self.failures >= S.BREAKER_FAILURES:
             if self.opened_at is None or self.state == "half_open":
@@ -61,28 +78,51 @@ breakers = {k: Breaker(k) for k in ("rails", "titles", "retriever")}
 simulate = {"mode": "off"}
 
 
-async def guarded(name: str, timeout_ms: int, coro_fn):
-    """Run coro_fn() under a budget and a breaker. Returns (result_or_None, info)."""
+def _counts(status) -> bool:
+    return status == 429 or status >= 500
+
+
+async def guarded(name: str, timeout_ms: int, coro_fn, parse=lambda r: r):
+    """Run coro_fn() under a budget and a breaker, then parse(result). Returns
+    (parsed_or_None, info).
+
+    Parsing happens inside, so a response the caller cannot read is a failure that
+    falls back -- not a 500 after the breaker has already recorded a success."""
     br = breakers[name]
     t0 = time.perf_counter()
     info = {"budget_ms": timeout_ms}
-    if simulate["mode"] == "open" or br.state == "open":
+    if simulate["mode"] == "open" or not br.allow():
         return None, {**info, "status": "breaker_open", "ms": 0.0}
     try:
         if simulate["mode"] == "timeout":
             await asyncio.sleep(timeout_ms / 1000.0)
             raise asyncio.TimeoutError
         result = await asyncio.wait_for(coro_fn(), timeout_ms / 1000.0)
-        br.ok()
-        return result, {**info, "status": "ok", "ms": _ms(t0)}
     except asyncio.TimeoutError:
         br.fail()
         return None, {**info, "status": "timeout", "ms": _ms(t0)}
-    except Exception as e:
+    except httpx.TransportError as e:
         br.fail()
+        return None, {**info, "status": "error", "error": str(e)[:200], "ms": _ms(t0)}
+    except Exception as e:
         status = getattr(e, "status", None)
+        if status is None or _counts(status):
+            br.fail()
+        else:
+            br.trial = False
         return None, {**info, "status": f"http_{status}" if status else "error",
                       "error": str(e)[:200], "ms": _ms(t0)}
+    except BaseException:
+        br.trial = False  # cancelled (client went away): let the next caller be the trial
+        raise
+    try:
+        parsed = parse(result)
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        br.fail()
+        return None, {**info, "status": "bad_response",
+                      "error": f"{type(e).__name__}: {str(e)[:180]}", "ms": _ms(t0)}
+    br.ok()
+    return parsed, {**info, "status": "ok", "ms": _ms(t0)}
 
 
 def _ms(t0):
